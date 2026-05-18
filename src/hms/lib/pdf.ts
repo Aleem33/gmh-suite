@@ -66,6 +66,8 @@ type PrescriptionPrintData = {
 function buildPreprintedPrescriptionHTML(data: PrescriptionPrintData): string {
   const settings = getPrescriptionPrintSettings();
   const scale = Math.max(70, Math.min(130, settings.fontScale || 100)) / 100;
+  const x = (base: number, section?: { offsetX?: number }) => `${base + Number(section?.offsetX || 0)}mm`;
+  const y = (base: number, section?: { offsetY?: number }) => `${base + Number(section?.offsetY || 0)}mm`;
   const rxRows = data.prescriptions.map((p, i) => `
     <div class="pad-med">
       <div class="pad-med-en">${i + 1}. ${esc(p.name)} ${esc(p.dosage)} - ${esc(p.frequency)} - ${esc(p.duration)}${p.instructions ? ` - ${esc(p.instructions)}` : ''}</div>
@@ -98,17 +100,17 @@ function buildPreprintedPrescriptionHTML(data: PrescriptionPrintData): string {
 body { background:#fff; font-family: Arial, sans-serif; color:#17205f; }
 .page { width:210mm; height:297mm; position:relative; overflow:hidden; background:transparent; }
 .overlay { position:absolute; inset:0; transform: translate(${settings.offsetX}mm, ${settings.offsetY}mm); transform-origin: top left; }
-.patient-name { position:absolute; left:127mm; top:55mm; width:62mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:right; }
-.patient-age { position:absolute; left:86mm; top:55mm; width:25mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:center; }
-.patient-date { position:absolute; left:42mm; top:55mm; width:34mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:center; }
-.clinical-content { position:absolute; left:7mm; top:74mm; width:34mm; min-height:190mm; color:#17205f; }
-.rx-content { position:absolute; left:46mm; top:72mm; width:112mm; min-height:194mm; color:#17205f; }
+.patient-name { position:absolute; left:${x(127, settings.name)}; top:${y(55, settings.name)}; width:62mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:right; }
+.patient-age { position:absolute; left:${x(86, settings.age)}; top:${y(55, settings.age)}; width:25mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:center; }
+.patient-date { position:absolute; left:${x(42, settings.date)}; top:${y(55, settings.date)}; width:34mm; font-size:${12 * scale}px; font-weight:700; white-space:nowrap; overflow:hidden; text-align:center; }
+.clinical-content { position:absolute; left:${x(7, settings.clinical)}; top:${y(74, settings.clinical)}; width:34mm; min-height:190mm; color:#17205f; }
+.rx-content { position:absolute; left:${x(46, settings.medicines)}; top:${y(72, settings.medicines)}; width:112mm; min-height:194mm; color:#17205f; }
 .pad-note, .pad-clinical { font-size:${11.5 * scale}px; line-height:1.35; margin-bottom:4mm; color:#17205f; }
 .pad-med { margin-bottom:5mm; page-break-inside:avoid; }
 .pad-med-en { font-size:${13 * scale}px; line-height:1.35; font-weight:700; color:#17205f; }
 .pad-med-ur { margin-top:1mm; font-family:'Noto Nastaliq Urdu', serif; font-size:${13.5 * scale}px; line-height:1.85; font-weight:700; color:#1a7a1a; direction:rtl; text-align:right; }
-.side-val { position:absolute; left:166mm; width:35mm; font-size:${10.5 * scale}px; font-weight:700; color:#17205f; white-space:nowrap; overflow:hidden; }
-.bp { top:164mm; } .temp { top:174mm; } .spo2 { top:184mm; } .pulse { top:194mm; }
+.side-val { position:absolute; left:${x(166, settings.vitals)}; width:35mm; font-size:${10.5 * scale}px; font-weight:700; color:#17205f; white-space:nowrap; overflow:hidden; }
+.bp { top:${y(164, settings.vitals)}; } .temp { top:${y(174, settings.vitals)}; } .spo2 { top:${y(184, settings.vitals)}; } .pulse { top:${y(194, settings.vitals)}; }
 @media print {
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   body { margin:0; padding:0; }

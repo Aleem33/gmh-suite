@@ -15,6 +15,16 @@ import {
 import { deleteAllAppData, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
 
 const ROLES = ['admin','receptionist','doctor','pharmacist','lab_technician','cashier'];
+type PrintSectionKey = 'name' | 'age' | 'date' | 'clinical' | 'medicines' | 'vitals';
+
+const PRINT_SECTIONS: { key: PrintSectionKey; title: string; hint: string }[] = [
+  { key: 'name', title: 'Patient Name', hint: 'Name field on top right' },
+  { key: 'age', title: 'Age', hint: 'Age/number field on top center' },
+  { key: 'date', title: 'Date', hint: 'Date field on top left' },
+  { key: 'clinical', title: 'Complaint / Diagnosis', hint: 'Clinical notes column' },
+  { key: 'medicines', title: 'Medicines', hint: 'Main prescription area' },
+  { key: 'vitals', title: 'Vitals', hint: 'BP, temperature, SpO2, pulse area' },
+];
 
 function F({ label, value, onChange, type = 'text', placeholder = '' }: {
   label: string; value: string; onChange: (v: string) => void;
@@ -102,6 +112,16 @@ export function Settings() {
     savePrescriptionPrintSettings(printSettings);
     setPrintSettingsMsg('✓ Prescription print settings saved!');
     setTimeout(() => setPrintSettingsMsg(''), 3000);
+  };
+
+  const setPrintSectionOffset = (section: PrintSectionKey, axis: 'offsetX' | 'offsetY', value: string) => {
+    setPrintSettings(settings => ({
+      ...settings,
+      [section]: {
+        ...settings[section],
+        [axis]: Number(value) || 0,
+      },
+    }));
   };
 
   // New user
@@ -339,15 +359,15 @@ export function Settings() {
         <p className="text-xs text-gray-500 mb-4">
           Prints only the prescription content onto the pre-printed GMH pad. Print one test on plain paper first, then adjust offsets if needed.
         </p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <F
-            label="Horizontal Offset (mm)"
+            label="Whole Page X Offset (mm)"
             type="number"
             value={String(printSettings.offsetX)}
             onChange={(v: string) => setPrintSettings(s => ({ ...s, offsetX: Number(v) || 0 }))}
           />
           <F
-            label="Vertical Offset (mm)"
+            label="Whole Page Y Offset (mm)"
             type="number"
             value={String(printSettings.offsetY)}
             onChange={(v: string) => setPrintSettings(s => ({ ...s, offsetY: Number(v) || 0 }))}
@@ -358,20 +378,42 @@ export function Settings() {
             value={String(printSettings.fontScale)}
             onChange={(v: string) => setPrintSettings(s => ({ ...s, fontScale: Number(v) || 100 }))}
           />
-          <div className="flex items-end">
-            <button
-              type="button"
-              onClick={() => setPrintSettings(DEFAULT_PRESCRIPTION_PRINT_SETTINGS)}
-              className="w-full border border-gray-200 text-gray-600 rounded-lg px-3 py-2 text-sm font-medium hover:bg-gray-50"
-            >
-              Reset Defaults
-            </button>
-          </div>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 mt-5">
+          {PRINT_SECTIONS.map(section => (
+            <div key={section.key} className="border border-gray-100 rounded-xl p-4 bg-gray-50/60">
+              <div className="mb-3">
+                <h3 className="text-sm font-semibold text-gray-800">{section.title}</h3>
+                <p className="text-[11px] text-gray-500">{section.hint}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <F
+                  label="X Offset (mm)"
+                  type="number"
+                  value={String(printSettings[section.key].offsetX)}
+                  onChange={(v: string) => setPrintSectionOffset(section.key, 'offsetX', v)}
+                />
+                <F
+                  label="Y Offset (mm)"
+                  type="number"
+                  value={String(printSettings[section.key].offsetY)}
+                  onChange={(v: string) => setPrintSectionOffset(section.key, 'offsetY', v)}
+                />
+              </div>
+            </div>
+          ))}
         </div>
         <div className="flex items-center gap-3 mt-4">
           <button onClick={savePrintSettings}
             className="flex items-center gap-2 px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
             <CheckCircle className="w-4 h-4" /> Save Print Settings
+          </button>
+          <button
+            type="button"
+            onClick={() => setPrintSettings(DEFAULT_PRESCRIPTION_PRINT_SETTINGS)}
+            className="border border-gray-200 text-gray-600 rounded-lg px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          >
+            Reset Defaults
           </button>
           {printSettingsMsg && <span className="text-sm font-medium text-green-600">{printSettingsMsg}</span>}
         </div>

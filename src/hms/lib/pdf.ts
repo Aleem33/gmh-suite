@@ -6,12 +6,10 @@ import { getPrescriptionPrintSettings } from './prescriptionPrintSettings';
 
 
 function printHTML(html: string) {
-  const prev = document.getElementById('__rx_frame__');
-  if (prev) prev.remove();
   const blob = new Blob([html], { type: 'text/html' });
   const url  = URL.createObjectURL(blob);
   const iframe = document.createElement('iframe');
-  iframe.id = '__rx_frame__';
+  iframe.id = `__print_frame_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   iframe.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:210mm;height:297mm;border:none;';
   iframe.src = url;
   document.body.appendChild(iframe);

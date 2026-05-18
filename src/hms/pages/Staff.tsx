@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc } from 'firebase/firestore';
-import { db, registerUser } from '../../firebase';
+import { db, registerUser, usernameToEmail } from '../../firebase';
 import { formatDate, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
 import { Plus, Search, Edit2, Trash2, X, UserCheck, UserX } from 'lucide-react';
@@ -55,16 +55,24 @@ export function Staff() {
       } else {
         let userId = '';
         if (form.email && form.password) {
-            try {
-              const cred = await registerUser(form.email, form.password); // form.email holds the username
-              userId = cred.user.uid;
-              await setDoc(doc(db, 'users', userId), {
-                name: form.name, username: form.email, email: form.email, role: form.role, app: 'hms', createdAt: nowISO(),
-              });
-            } catch (e: any) {
-              console.warn('Could not create auth user:', e.message);
-            }
+          try {
+            const username = form.email.trim().toLowerCase().replace(/\s+/g, '.');
+            const cred = await registerUser(username, form.password);
+            userId = cred.user.uid;
+            await setDoc(doc(db, 'users', userId), {
+              name: form.name,
+              username,
+              email: usernameToEmail(username),
+              role: form.role,
+              app: 'hms',
+              createdAt: nowISO(),
+            });
+          } catch (e: any) {
+            throw new Error(e?.code === 'auth/email-already-in-use'
+              ? 'Username already taken. Choose a different username.'
+              : e?.message || 'Could not create login account.');
           }
+        }
         const { password, ...data } = form;
         const ref = await addDoc(collection(db, 'staff'), { ...data, salary: Number(form.salary) || 0, userId, status: 'active', createdAt: nowISO() });
         await logAudit('create', 'staff', ref.id, `${form.name} — ${form.role}`);

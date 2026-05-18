@@ -115,7 +115,7 @@ export function Login({ onLoginSuccess, onBack }: Props) {
           </p>
         </div>
 
-        <p className="text-center text-blue-300/50 text-xs mt-6">GMH Suite HMS v2.0</p>
+        <p className="text-center text-blue-300/50 text-xs mt-6">GMH Suite HMS</p>
       </div>
     </div>
   );

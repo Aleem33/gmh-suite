@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, addDoc, doc, updateDoc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, doc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { printOrShare, printPageOrShare } from '../lib/nativeUtils';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
@@ -235,21 +235,38 @@ export function Billing() {
         saleData.customerName  = selectedCustomer.name;
         saleData.customerPhone = selectedCustomer.phone || '';
       }
-      const docRef = await addDoc(collection(db, 'sales'), saleData);
-      for (const item of cart) {
-        const unitsToDeduct = item.quantity * (item.sellType === 'box' ? item.unitsPerBox : 1);
-        await updateDoc(doc(db, 'medicines', item.medicineId), { stock: increment(-unitsToDeduct) });
-      }
-      if (selectedCustomer && pendingAmount > 0) {
-        await updateDoc(doc(db, 'customers', selectedCustomer.id), { creditBalance: increment(pendingAmount) });
-      }
-      setLastReceipt({ ...saleData, id: docRef.id });
+      const saleRef = doc(collection(db, 'sales'));
+      await runTransaction(db, async (tx) => {
+        const stockUpdates: { medRef: ReturnType<typeof doc>; unitsToDeduct: number }[] = [];
+        for (const item of cart) {
+          const medRef = doc(db, 'medicines', item.medicineId);
+          const medSnap = await tx.get(medRef);
+          if (!medSnap.exists()) throw new Error(`Medicine not found: ${item.name}`);
+
+          const currentStock = Number(medSnap.data().stock || 0);
+          const unitsToDeduct = item.quantity * (item.sellType === 'box' ? item.unitsPerBox : 1);
+          if (currentStock < unitsToDeduct) {
+            throw new Error(`Not enough stock for ${item.name}. Available: ${currentStock}, needed: ${unitsToDeduct}.`);
+          }
+          stockUpdates.push({ medRef, unitsToDeduct });
+        }
+
+        stockUpdates.forEach(({ medRef, unitsToDeduct }) => {
+          tx.update(medRef, { stock: increment(-unitsToDeduct) });
+        });
+        tx.set(saleRef, saleData);
+        if (selectedCustomer && pendingAmount > 0) {
+          tx.update(doc(db, 'customers', selectedCustomer.id), { creditBalance: increment(pendingAmount) });
+        }
+      });
+      setLastReceipt({ ...saleData, id: saleRef.id });
       setCart([]); setOrderDiscount(0); setAmountPaid('');
       setSelectedCustomer(null); setCustomerSearch('');
       setMobileTab('medicines');
       setTimeout(handlePrint, 500);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'sales');
+    } catch (error: any) {
+      setStockError(error?.message || handleFirestoreError(error, OperationType.CREATE, 'sales'));
+      setTimeout(() => setStockError(''), 5000);
     }
   };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, doc, increment } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, doc, increment, runTransaction } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { Plus, Search, X, AlertTriangle, Edit2, FileText, CheckCircle, Clock } from 'lucide-react';
@@ -113,14 +113,42 @@ export function Pharmacy() {
     if (!selectedOrder) return;
     const toDispense = dispenseItems.filter(i => i.matchedId && i.qty > 0);
     if (!toDispense.length) { await alert('No medicines linked to stock. Please link each item.', 'Nothing to Dispense'); return; }
+    const lowStockItem = toDispense.find(item => {
+      const med = medicines.find(m => m.id === item.matchedId);
+      return !med || Number(med.stock || 0) < item.qty;
+    });
+    if (lowStockItem) {
+      const med = medicines.find(m => m.id === lowStockItem.matchedId);
+      await alert(
+        `Insufficient stock for ${lowStockItem.name}. Available: ${Number(med?.stock || 0)}, needed: ${lowStockItem.qty}.`,
+        'Insufficient Stock'
+      );
+      return;
+    }
     setSaving(true);
     try {
-      for (const item of toDispense) {
-        await updateDoc(doc(db, 'medicines', item.matchedId), { stock: increment(-item.qty), updatedAt: nowISO() });
-      }
-      await updateDoc(doc(db, 'pharmacyOrders', selectedOrder.id), {
-        status: 'dispensed', dispensedAt: nowISO(),
-        dispensedItems: toDispense.map(i => ({ name: i.name, matchedName: i.matchedName, qty: i.qty, frequency: i.frequency, duration: i.duration })),
+      await runTransaction(db, async (tx) => {
+        const stockUpdates: { medRef: ReturnType<typeof doc>; qty: number }[] = [];
+        for (const item of toDispense) {
+          const medRef = doc(db, 'medicines', item.matchedId);
+          const medSnap = await tx.get(medRef);
+          if (!medSnap.exists()) throw new Error(`Medicine not found: ${item.name}`);
+
+          const currentStock = Number(medSnap.data().stock || 0);
+          if (currentStock < item.qty) {
+            throw new Error(`Insufficient stock for ${item.name}. Available: ${currentStock}, needed: ${item.qty}.`);
+          }
+          stockUpdates.push({ medRef, qty: item.qty });
+        }
+
+        stockUpdates.forEach(({ medRef, qty }) => {
+          tx.update(medRef, { stock: increment(-qty), updatedAt: nowISO() });
+        });
+        tx.update(doc(db, 'pharmacyOrders', selectedOrder.id), {
+          status: 'dispensed',
+          dispensedAt: nowISO(),
+          dispensedItems: toDispense.map(i => ({ name: i.name, matchedName: i.matchedName, qty: i.qty, frequency: i.frequency, duration: i.duration })),
+        });
       });
       setSelectedOrder(null); setDispenseItems([]);
     } catch (e: any) { await alert('Dispense failed: ' + (e.message || 'Unknown error'), 'Dispense Failed'); }
@@ -139,6 +167,11 @@ export function Pharmacy() {
   const filteredOrders    = pharmacyOrders.filter(o =>
     !rxSearch || o.patientName?.toLowerCase().includes(rxSearch.toLowerCase()) || o.patientMRN?.includes(rxSearch)
   );
+  const hasInvalidDispense = dispenseItems.some(item => {
+    if (!item.matchedId || item.qty <= 0) return true;
+    const med = medicines.find(m => m.id === item.matchedId);
+    return !med || Number(med.stock || 0) < item.qty;
+  });
   const pendingCount  = pharmacyOrders.filter(o => o.status === 'pending').length;
   const lowStockCount = medicines.filter(m => m.stock <= (m.unitsPerBox || 1) * 2).length;
   const expiringCount = medicines.filter(m => m.expiryDate && new Date(m.expiryDate) < new Date(Date.now() + 30 * 86400000)).length;
@@ -460,7 +493,7 @@ export function Pharmacy() {
             <div className="flex gap-3 px-5 pb-5">
               <button onClick={() => { setSelectedOrder(null); setDispenseItems([]); }}
                 className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm">Cancel</button>
-              <button onClick={handleDispense} disabled={saving}
+              <button onClick={handleDispense} disabled={saving || hasInvalidDispense}
                 className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-60 flex items-center justify-center gap-2">
                 <CheckCircle className="w-4 h-4" />
                 {saving ? 'Dispensing...' : 'Confirm Dispense & Deduct Stock'}

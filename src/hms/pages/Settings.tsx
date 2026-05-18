@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
-import { db, auth, registerUser } from '../../firebase';
+import { db, auth, registerUser, usernameToEmail } from '../../firebase';
 import { nowISO } from '../lib/utils';
 import { Building2, Download, Upload, Trash2, AlertTriangle, UserPlus, X, Lock, Eye, EyeOff, Bot, CheckCircle, RefreshCw, Printer } from 'lucide-react';
 import { AppUpdater } from '../../components/AppUpdater';
@@ -186,8 +186,16 @@ export function Settings() {
     if (!userForm.name || !userForm.email || !userForm.password || !userForm.role) { setUserMsg('All fields required.'); return; }
     setCreatingUser(true); setUserMsg('');
     try {
-      const cred = await registerUser(userForm.email, userForm.password);
-      await setDoc(doc(db, 'users', cred.user.uid), { name: userForm.name, username: userForm.email, email: userForm.email, role: userForm.role, app: 'hms', createdAt: nowISO() });
+      const username = userForm.email.trim().toLowerCase().replace(/\s+/g, '.');
+      const cred = await registerUser(username, userForm.password);
+      await setDoc(doc(db, 'users', cred.user.uid), {
+        name: userForm.name,
+        username,
+        email: usernameToEmail(username),
+        role: userForm.role,
+        app: 'hms',
+        createdAt: nowISO(),
+      });
       setUserMsg('✓ User created successfully!');
       setUserForm(emptyUser);
       setTimeout(() => { setUserMsg(''); setShowUserModal(false); }, 2000);

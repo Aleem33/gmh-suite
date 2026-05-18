@@ -212,12 +212,13 @@ export function OPD() {
     });
   };
 
-  const printBatchQueue = () => {
+  const printBatchQueue = async () => {
     const toPrint = filteredConsultations.filter((c: any) => printQueue.has(c.id));
     if (!toPrint.length) return;
     setBatchPrinting(true);
-    toPrint.forEach((c: any, i) => {
-      setTimeout(async () => {
+    try {
+      for (let i = 0; i < toPrint.length; i++) {
+        const c = toPrint[i];
         const rx = withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(c.prescriptions || []));
         printPrescription({
           hospitalName: 'GMH Suite', patientName: c.patientName, patientMRN: c.patientMRN,
@@ -228,9 +229,16 @@ export function OPD() {
           followUpDate: c.followUpDate ? formatDate(c.followUpDate) : undefined,
           notes: c.notes, vitals: c.vitals || {},
         });
-        if (i === toPrint.length - 1) { setPrintQueue(new Set()); setBatchPrinting(false); }
-      }, i * 1500);
-    });
+        if (i < toPrint.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+        }
+      }
+      setPrintQueue(new Set());
+    } catch (e: any) {
+      await alert(e?.message || 'One or more prescriptions could not be printed.', 'Batch Print Failed');
+    } finally {
+      setBatchPrinting(false);
+    }
   };
 
   // ── WhatsApp share ──────────────────────────────────────────────────────────

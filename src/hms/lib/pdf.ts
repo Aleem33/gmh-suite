@@ -86,6 +86,13 @@ function buildPreprintedPrescriptionHTML(data: PrescriptionPrintData): string {
   const notes = data.notes ? `<div class="pad-clinical"><strong>Notes</strong><br/>${esc(data.notes)}</div>` : '';
 
   const clinicalNotes = [complaints, diagnosis, notes].filter(Boolean).join('');
+  const vitalRows = [
+    ['BP', data.vitals?.bp],
+    ['Temp', data.vitals?.temperature],
+    ['Wt', data.vitals?.weight],
+    ['O2', data.vitals?.spo2],
+    ['Pulse', data.vitals?.pulse],
+  ].map(([label, value]) => value ? `<div class="vital-row"><span class="vital-label">${label}:</span><span class="vital-value">${esc(value)}</span></div>` : '').join('');
 
   return `<!DOCTYPE html>
 <html>
@@ -109,8 +116,10 @@ body { background:#fff; font-family: Arial, sans-serif; color:#17205f; }
 .pad-med { margin-bottom:5mm; page-break-inside:avoid; }
 .pad-med-en { font-size:${13 * scale}px; line-height:1.35; font-weight:700; color:#17205f; }
 .pad-med-ur { margin-top:1mm; font-family:'Noto Nastaliq Urdu', serif; font-size:${13.5 * scale}px; line-height:1.85; font-weight:700; color:#1a7a1a; direction:rtl; text-align:right; }
-.side-val { position:absolute; left:${x(166, settings.vitals)}; width:35mm; font-size:${10.5 * scale}px; font-weight:700; color:#17205f; white-space:nowrap; overflow:hidden; }
-.bp { top:${y(164, settings.vitals)}; } .temp { top:${y(174, settings.vitals)}; } .spo2 { top:${y(184, settings.vitals)}; } .pulse { top:${y(194, settings.vitals)}; }
+.vitals-content { position:absolute; left:${x(162, settings.vitals)}; top:${y(160, settings.vitals)}; width:42mm; color:#17205f; }
+.vital-row { display:flex; gap:1.5mm; align-items:baseline; font-size:${10.5 * scale}px; line-height:1.45; font-weight:700; white-space:nowrap; overflow:hidden; }
+.vital-label { flex:0 0 10mm; color:#17205f; }
+.vital-value { flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; }
 @media print {
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
   body { margin:0; padding:0; }
@@ -131,10 +140,9 @@ body { background:#fff; font-family: Arial, sans-serif; color:#17205f; }
       ${labOrders}
       ${followup}
     </div>
-    <div class="side-val bp">${esc(data.vitals?.bp || '')}</div>
-    <div class="side-val temp">${esc(data.vitals?.temperature || '')}</div>
-    <div class="side-val spo2">${esc(data.vitals?.spo2 || '')}</div>
-    <div class="side-val pulse">${esc(data.vitals?.pulse || '')}</div>
+    <div class="vitals-content">
+      ${vitalRows}
+    </div>
   </div>
 </div>
 </body>

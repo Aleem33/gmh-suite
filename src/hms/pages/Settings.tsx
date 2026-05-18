@@ -23,7 +23,7 @@ const PRINT_SECTIONS: { key: PrintSectionKey; title: string; hint: string }[] = 
   { key: 'date', title: 'Date', hint: 'Date field on top left' },
   { key: 'clinical', title: 'Complaint / Diagnosis', hint: 'Clinical notes column' },
   { key: 'medicines', title: 'Medicines', hint: 'Main prescription area' },
-  { key: 'vitals', title: 'Vitals', hint: 'BP, temperature, SpO2, pulse area' },
+  { key: 'vitals', title: 'Vitals', hint: 'BP, temperature, weight, oxygen, pulse area' },
 ];
 
 function F({ label, value, onChange, type = 'text', placeholder = '' }: {

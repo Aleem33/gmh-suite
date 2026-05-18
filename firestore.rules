@@ -25,6 +25,11 @@ service cloud.firestore {
     // ── Users ──────────────────────────────────────────────────────────────────
     match /users/{uid} {
       allow read: if isAuth() && (request.auth.uid == uid || isAdmin());
+      allow create: if isAuth()
+        && request.auth.uid == uid
+        && request.auth.token.email == 'admin@gmh-suite.internal'
+        && request.resource.data.role == 'admin'
+        && request.resource.data.email == 'admin@gmh-suite.internal';
       allow write: if isAdmin();
     }
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth, db, logout } from './firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { AppSelector } from './landing/AppSelector';
 import { HMSApp } from './hms/HMSApp';
 import { POSApp } from './pos/POSApp';
@@ -10,6 +10,7 @@ import { GlobalAppNotifications } from './components/GlobalAppNotifications';
 import { AppDialogProvider } from './components/AppDialog';
 
 type AppMode = 'hms' | 'pos' | null;
+const FIRST_ADMIN_EMAIL = 'admin@gmh-suite.internal';
 
 export default function App() {
   const [appMode, setAppMode]       = useState<AppMode>(null);
@@ -30,15 +31,27 @@ export default function App() {
         try {
           const snap = await getDoc(doc(db, 'users', u.uid));
           if (!snap.exists()) {
-            setAuthError('Your account has not been configured yet. Please contact your administrator.');
-            await logout();
-            setUserRole(null);
-            setUserEmail('');
+            if ((u.email || '').toLowerCase() === FIRST_ADMIN_EMAIL) {
+              await setDoc(doc(db, 'users', u.uid), {
+                name: 'Administrator',
+                username: 'admin',
+                email: FIRST_ADMIN_EMAIL,
+                role: 'admin',
+                app: 'all',
+                createdAt: new Date().toISOString(),
+              });
+              setUserRole('admin');
+            } else {
+              setAuthError('Your account has not been configured yet. Please contact your administrator.');
+              await logout();
+              setUserRole(null);
+              setUserEmail('');
+            }
           } else {
             setUserRole(snap.data().role || 'cashier');
           }
         } catch {
-          setAuthError('Failed to load your account. Please try again.');
+          setAuthError('Failed to load your account. Make sure the first admin user is configured in Firestore.');
           await logout();
         }
       } else {

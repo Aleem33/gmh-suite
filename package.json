@@ -1,0 +1,114 @@
+{
+  "name": "gmh-suite",
+  "productName": "GMH Suite",
+  "private": true,
+  "version": "3.1.13",
+  "description": "GMH Suite Integrated Hospital & Pharmacy Management Suite",
+  "author": "GMH Suite",
+  "main": "main.js",
+  "type": "commonjs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Aleem33/gmh-suite.git"
+  },
+  "scripts": {
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
+    "electron:dev": "vite build --watch",
+    "lint": "tsc --noEmit",
+    "icons": "node scripts/generate-icons.mjs",
+    "dist": "npm run build && electron-builder --win --publish never",
+    "release": "npm run build && electron-builder --win --publish always",
+    "bump:patch": "npm version patch --no-git-tag-version",
+    "bump:minor": "npm version minor --no-git-tag-version",
+    "bump:major": "npm version major --no-git-tag-version"
+  },
+  "build": {
+    "appId": "com.gmh.suite",
+    "productName": "GMH Suite",
+    "files": [
+      "dist/**/*",
+      "main.js",
+      "preload.js",
+      "updater.js",
+      "icon.ico",
+      "icon.png",
+      "build/icon.png",
+      "assets/**/*"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "Aleem33",
+      "repo": "gmh-suite",
+      "releaseType": "release"
+    },
+    "win": {
+      "artifactName": "GMH-Suite-${version}.${ext}",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "artifactName": "GMH-Suite-Setup-${version}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "GMH Suite"
+    },
+    "directories": {
+      "output": "release"
+    },
+    "icon": "assets/icon.png",
+    "linux": {
+      "icon": "assets/icon.png"
+    },
+    "mac": {
+      "icon": "assets/icon.png"
+    }
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "date-fns": "^3.6.0",
+    "electron-updater": "^6.8.3",
+    "firebase": "^11.0.0",
+    "jspdf": "^2.5.1",
+    "jspdf-autotable": "^3.8.2",
+    "lucide-react": "^0.469.0",
+    "papaparse": "^5.4.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-is": "^18.3.1",
+    "react-router-dom": "^6.28.0",
+    "recharts": "^2.13.3",
+    "tailwind-merge": "^2.5.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.1",
+    "@types/papaparse": "^5.3.14",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.1.8",
+    "postcss": "^8.4.49",
+    "sharp": "^0.34.5",
+    "tailwindcss": "^3.4.15",
+    "to-ico": "^1.1.5",
+    "typescript": "~5.6.3",
+    "vite": "^5.4.11"
+  }
+}

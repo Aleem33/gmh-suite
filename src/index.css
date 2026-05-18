@@ -1,0 +1,26 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Nastaliq+Urdu:wght@400;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* { font-family: 'DM Sans', sans-serif; }
+
+/* Urdu text utility */
+.font-urdu {
+  font-family: 'Noto Nastaliq Urdu', serif !important;
+}
+[dir="rtl"] {
+  font-family: 'Noto Nastaliq Urdu', serif;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* Print */
+@media print {
+  .no-print { display: none !important; }
+}

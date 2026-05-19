@@ -60,7 +60,16 @@ export function Customers() {
   const customerPayments = (customerId: string) =>
     payments.filter(p => p.customerId === customerId);
 
-  const totalPending = filteredCustomers.reduce((sum, c) => sum + (c.creditBalance || 0), 0);
+  const getCustomerTotals = (customerId: string) => {
+    const rows = customerSales(customerId);
+    return {
+      total: rows.reduce((sum, sale) => sum + (sale.total || 0), 0),
+      paid: rows.reduce((sum, sale) => sum + (sale.amountPaid ?? sale.total ?? 0), 0),
+      pending: rows.reduce((sum, sale) => sum + (sale.pendingAmount || 0), 0),
+    };
+  };
+
+  const totalPending = filteredCustomers.reduce((sum, c) => sum + getCustomerTotals(c.id).pending, 0);
 
   const openReceiptPayment = (cust: any, sale: any) => {
     setPaymentModal({ customer: cust, sale });
@@ -157,10 +166,10 @@ export function Customers() {
       return `
         <div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
           <div style="background:#f3f4f6;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-weight:700;font-size:12px;color:#374151;">Bill #${idx + 1} &nbsp;â€”&nbsp; ${sale.date ? new Date(sale.date).toLocaleDateString('en-PK') : 'N/A'}</span>
+            <span style="font-weight:700;font-size:12px;color:#374151;">Bill #${idx + 1} - ${sale.date ? new Date(sale.date).toLocaleDateString('en-PK') : 'N/A'}</span>
             ${pending > 0
               ? `<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">DUE Rs.${pending.toFixed(2)}</span>`
-              : `<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">âœ“ PAID</span>`
+              : `<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">PAID</span>`
             }
           </div>
           <table style="width:100%;border-collapse:collapse;">
@@ -199,7 +208,7 @@ export function Customers() {
             ? `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;padding:5px 8px;border-radius:4px;margin-top:4px;">
                 <span>OUTSTANDING:</span><span>Rs.${totalPending.toFixed(2)}</span>
                </div>`
-            : `<div style="text-align:center;font-size:12px;font-weight:700;color:#16a34a;background:#dcfce7;padding:5px;border-radius:4px;margin-top:4px;">âœ“ ALL CLEAR</div>`
+            : `<div style="text-align:center;font-size:12px;font-weight:700;color:#16a34a;background:#dcfce7;padding:5px;border-radius:4px;margin-top:4px;">ALL CLEAR</div>`
           }
         </div>
       </div>`;
@@ -268,6 +277,7 @@ export function Customers() {
           {filteredCustomers.map(cust => {
             const custSales    = customerSales(cust.id);
             const custPayments = customerPayments(cust.id);
+            const custTotals   = getCustomerTotals(cust.id);
             const isExpanded   = expandedId === cust.id;
 
             return (
@@ -316,8 +326,8 @@ export function Customers() {
                   <div className="mt-2 ml-8 flex flex-wrap gap-x-4 gap-y-1">
                     <div>
                       <span className="text-xs text-gray-400">Balance: </span>
-                      <span className={`text-xs font-bold ${(cust.creditBalance || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {(cust.creditBalance || 0) > 0 ? formatCurrency(cust.creditBalance) : 'âœ“ Clear'}
+                      <span className={`text-xs font-bold ${custTotals.pending > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                        {custTotals.pending > 0 ? formatCurrency(custTotals.pending) : 'Clear'}
                       </span>
                     </div>
                     <div>
@@ -340,9 +350,9 @@ export function Customers() {
                     {/* Sale history header */}
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-bold text-blue-800">Sale History</h3>
-                      {(cust.creditBalance || 0) > 0 && (
+                      {custTotals.pending > 0 && (
                         <span className="text-xs font-bold text-red-700 bg-red-100 px-2 py-1 rounded-full">
-                          Outstanding: {formatCurrency(cust.creditBalance)}
+                          Outstanding: {formatCurrency(custTotals.pending)}
                         </span>
                       )}
                     </div>
@@ -351,7 +361,7 @@ export function Customers() {
                       <p className="text-sm text-blue-400 italic">No sales recorded yet.</p>
                     ) : (
                       <>
-                        {/* â”€â”€ Mobile: cards â”€â”€ */}
+                        {/* Mobile: cards */}
                         <div className="space-y-2 md:hidden">
                           {custSales.map(sale => (
                             <div key={sale.id} className="bg-white rounded-lg border border-blue-100 p-3">
@@ -379,7 +389,7 @@ export function Customers() {
                                 <div className={`rounded p-1.5 ${(sale.pendingAmount || 0) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
                                   <p className="text-[10px] text-gray-400">Pending</p>
                                   <p className={`text-xs font-bold ${(sale.pendingAmount || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                    {(sale.pendingAmount || 0) > 0 ? formatCurrency(sale.pendingAmount) : 'âœ“'}
+                                    {(sale.pendingAmount || 0) > 0 ? formatCurrency(sale.pendingAmount) : 'Paid'}
                                   </p>
                                 </div>
                               </div>
@@ -397,20 +407,20 @@ export function Customers() {
                           <div className="bg-blue-100 rounded-lg p-3 grid grid-cols-3 gap-2 text-center">
                             <div>
                               <p className="text-[10px] text-blue-600 font-semibold">TOTAL</p>
-                              <p className="text-xs font-bold text-blue-900">{formatCurrency(custSales.reduce((s, r) => s + (r.total || 0), 0))}</p>
+                              <p className="text-xs font-bold text-blue-900">{formatCurrency(custTotals.total)}</p>
                             </div>
                             <div>
                               <p className="text-[10px] text-green-600 font-semibold">PAID</p>
-                              <p className="text-xs font-bold text-green-800">{formatCurrency(custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0))}</p>
+                              <p className="text-xs font-bold text-green-800">{formatCurrency(custTotals.paid)}</p>
                             </div>
                             <div>
                               <p className="text-[10px] text-red-600 font-semibold">PENDING</p>
-                              <p className="text-xs font-bold text-red-800">{formatCurrency(custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0))}</p>
+                              <p className="text-xs font-bold text-red-800">{formatCurrency(custTotals.pending)}</p>
                             </div>
                           </div>
                         </div>
 
-                        {/* â”€â”€ Desktop: table â”€â”€ */}
+                        {/* Desktop: table */}
                         <div className="hidden md:block rounded-lg overflow-hidden border border-blue-200 bg-white">
                           <table className="w-full text-left text-sm border-collapse">
                             <thead>
@@ -435,7 +445,7 @@ export function Customers() {
                                   <td className="p-3 text-right">
                                     {(sale.pendingAmount || 0) > 0
                                       ? <span className="font-bold text-red-600">{formatCurrency(sale.pendingAmount)}</span>
-                                      : <span className="text-green-600 text-xs font-medium">âœ“ Paid</span>}
+                                      : <span className="text-green-600 text-xs font-medium">Paid</span>}
                                   </td>
                                   <td className="p-3 text-right">
                                     <div className="flex items-center justify-end gap-2">
@@ -456,10 +466,10 @@ export function Customers() {
                             </tbody>
                             <tfoot>
                               <tr className="bg-blue-50 border-t-2 border-blue-200 text-xs font-bold">
-                                <td className="p-3 text-blue-800" colSpan={2}>TOTAL â€” {custSales.length} sale(s)</td>
-                                <td className="p-3 text-right text-blue-900">{formatCurrency(custSales.reduce((s, r) => s + (r.total || 0), 0))}</td>
-                                <td className="p-3 text-right text-green-700">{formatCurrency(custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0))}</td>
-                                <td className="p-3 text-right text-red-600">{formatCurrency(custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0))}</td>
+                                <td className="p-3 text-blue-800" colSpan={2}>TOTAL - {custSales.length} sale(s)</td>
+                                <td className="p-3 text-right text-blue-900">{formatCurrency(custTotals.total)}</td>
+                                <td className="p-3 text-right text-green-700">{formatCurrency(custTotals.paid)}</td>
+                                <td className="p-3 text-right text-red-600">{formatCurrency(custTotals.pending)}</td>
                                 <td className="p-3"></td>
                               </tr>
                             </tfoot>
@@ -546,7 +556,7 @@ export function Customers() {
         </div>
       </div>
 
-      {/* â”€â”€ Record Payment Modal â”€â”€ */}
+      {/* Record Payment Modal */}
       {paymentModal && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
@@ -605,7 +615,7 @@ export function Customers() {
                   <div className="flex justify-between text-sm mt-1">
                     <span className="text-gray-600">Remaining after payment:</span>
                     <span className={`font-bold ${willClear ? 'text-green-700' : 'text-red-600'}`}>
-                      {willClear ? 'âœ“ Fully Cleared' : formatCurrency(maxPayable - payAmount)}
+                      {willClear ? 'Fully Cleared' : formatCurrency(maxPayable - payAmount)}
                     </span>
                   </div>
                 </div>
@@ -616,7 +626,7 @@ export function Customers() {
                 <button onClick={handleRecordPayment} disabled={!isPayValid || paymentLoading}
                   className="flex-1 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2">
                   <Wallet className="w-4 h-4" />
-                  {paymentLoading ? 'Savingâ€¦' : 'Record Payment'}
+                  {paymentLoading ? 'Saving...' : 'Record Payment'}
                 </button>
               </div>
             </div>
@@ -624,7 +634,7 @@ export function Customers() {
         </div>
       )}
 
-      {/* â”€â”€ Add / Edit Customer Modal â”€â”€ */}
+      {/* Add / Edit Customer Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
@@ -666,7 +676,7 @@ export function Customers() {
         </div>
       )}
 
-      {/* â”€â”€ Sale Detail Modal â”€â”€ */}
+      {/* Sale Detail Modal */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
@@ -675,7 +685,7 @@ export function Customers() {
                 <h2 className="text-lg font-bold text-gray-900">Sale Details</h2>
                 <p className="text-sm text-gray-500 mt-0.5">
                   {selectedSale.date ? format(new Date(selectedSale.date), 'MMM dd, yyyy HH:mm') : 'N/A'}
-                  {' '}â€¢ ID: {selectedSale.id.slice(0, 10)}â€¦
+                  {' '}- ID: {selectedSale.id.slice(0, 10)}...
                 </p>
               </div>
               <button onClick={() => setSelectedSale(null)}
@@ -692,7 +702,7 @@ export function Customers() {
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${item.sellType === 'box' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                         {item.sellType}
                       </span>
-                      <span className="text-xs text-gray-400">{formatCurrency(item.price)} Ã— {item.quantity}</span>
+                      <span className="text-xs text-gray-400">{formatCurrency(item.price)} x {item.quantity}</span>
                       {item.itemDiscount > 0 && <span className="text-xs text-orange-600">-{formatCurrency(item.itemDiscount)}</span>}
                     </div>
                   </div>
@@ -737,7 +747,7 @@ export function Customers() {
                   )}
                 </>
               ) : (
-                <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">âœ“ Fully Paid</div>
+                <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">Fully Paid</div>
               )}
             </div>
           </div>

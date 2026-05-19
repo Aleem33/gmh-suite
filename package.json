@@ -2,7 +2,7 @@
   "name": "gmh-suite",
   "productName": "GMH Suite",
   "private": true,
-  "version": "3.1.20",
+  "version": "3.1.21",
   "description": "GMH Suite Integrated Hospital & Pharmacy Management Suite",
   "author": "GMH Suite",
   "main": "main.js",

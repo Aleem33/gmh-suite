@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { collection, onSnapshot, updateDoc, doc, writeBatch, query, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { Bell, Search, Users, Pill, Briefcase, X, CheckCheck } from 'lucide-react';
+import { Bell, Search, Users, Pill, Briefcase, X, CheckCheck, Menu } from 'lucide-react';
 import { useGlobalSearch } from '../lib/search';
 import { cn } from '../lib/utils';
 import { formatDate } from '../lib/utils';
@@ -28,7 +28,7 @@ function getInitial(email: string): string {
   return email ? email[0].toUpperCase() : 'U';
 }
 
-export function TopNavbar({ userEmail, userRole }: { userEmail: string; userRole: string }) {
+export function TopNavbar({ userEmail, userRole, onOpenSidebar }: { userEmail: string; userRole: string; onOpenSidebar?: () => void }) {
   const navigate = useNavigate();
 
   // Search
@@ -94,17 +94,25 @@ export function TopNavbar({ userEmail, userRole }: { userEmail: string; userRole
   const displayName = getDisplayName(userEmail);
 
   return (
-    <header className="h-14 bg-white border-b border-gray-100 flex items-center px-6 gap-4 shrink-0 z-20">
+    <header className="h-14 bg-white border-b border-gray-100 flex items-center px-3 sm:px-4 md:px-6 gap-2 sm:gap-4 shrink-0 z-20">
+      <button
+        type="button"
+        onClick={onOpenSidebar}
+        className="md:hidden p-2 -ml-1 rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
+        aria-label="Open menu"
+      >
+        <Menu className="w-5 h-5" />
+      </button>
 
       {/* Global Search */}
-      <div ref={searchRef} className="relative flex-1 max-w-sm">
+      <div ref={searchRef} className="relative flex-1 min-w-0 max-w-sm">
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input
             value={searchQuery}
             onChange={e => { setSearchQuery(e.target.value); setSearchOpen(true); }}
             onFocus={() => setSearchOpen(true)}
-            placeholder="Search patients, staff, medicines..."
+            placeholder="Search..."
             className="w-full pl-9 pr-4 py-2 text-sm bg-gray-50 border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
           />
           {searchQuery && (
@@ -115,7 +123,7 @@ export function TopNavbar({ userEmail, userRole }: { userEmail: string; userRole
         </div>
 
         {searchOpen && searchQuery.length >= 2 && (
-          <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
+            <div className="absolute top-full left-0 right-0 sm:right-auto sm:w-96 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-50 overflow-hidden">
             {results.length === 0 ? (
               <div className="px-4 py-3 text-sm text-gray-400 text-center">No results found</div>
             ) : (
@@ -159,7 +167,7 @@ export function TopNavbar({ userEmail, userRole }: { userEmail: string; userRole
           </button>
 
           {notifOpen && (
-            <div className="absolute right-0 top-full mt-1 w-80 bg-white border border-gray-200 rounded-xl shadow-lg z-50">
+            <div className="fixed left-3 right-3 top-16 sm:absolute sm:left-auto sm:right-0 sm:top-full sm:mt-1 sm:w-80 bg-white border border-gray-200 rounded-xl shadow-lg z-50">
               <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
                 <span className="font-semibold text-sm text-gray-900">Notifications</span>
                 {unread > 0 && (

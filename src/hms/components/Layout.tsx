@@ -7,6 +7,7 @@ import {
   Settings as SettingsIcon, LogOut, Truck,
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
   Shield, CalendarCheck, Hotel, ArrowLeftRight, Monitor, BookOpen,
+  X,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
@@ -58,6 +59,7 @@ interface Props {
 
 export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
   const [collapsed, setCollapsed] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────────
@@ -85,12 +87,136 @@ export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
     return () => window.removeEventListener('keydown', handler);
   }, [navigate]);
 
+  const NavGroups = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
+    <>
+      {NAV.map(({ group, items }) => {
+        const visible = items.filter(i => i.roles.includes(role));
+        if (!visible.length) return null;
+        return (
+          <div key={group}>
+            {(!collapsed || mobile) && (
+              <p className={cn(
+                'px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest',
+                mobile ? 'text-slate-400' : 'text-blue-300/60'
+              )}>
+                {group}
+              </p>
+            )}
+            <div className="space-y-0.5">
+              {visible.map(({ to, icon: Icon, label }) => (
+                <NavLink
+                  key={to} to={to} end={to === '/'}
+                  title={!mobile && collapsed ? label : undefined}
+                  onClick={onNavigate}
+                  className={({ isActive }) => cn(
+                    'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
+                    !mobile && collapsed && 'justify-center px-2',
+                    mobile
+                      ? isActive
+                        ? 'bg-blue-50 text-blue-700'
+                        : 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+                      : isActive
+                        ? 'bg-blue-600 text-white'
+                        : 'text-blue-100/70 hover:text-white hover:bg-white/10'
+                  )}
+                >
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {(mobile || !collapsed) && label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+
+  const BottomActions = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
+    <div className="space-y-0.5">
+      {(role === 'admin' || role === 'pharmacist' || role === 'cashier') && (
+        <button
+          onClick={() => {
+            onNavigate?.();
+            onSwitchApp('pos');
+          }}
+          title={!mobile && collapsed ? 'Switch to Pharmacy POS' : undefined}
+          className={cn(
+            'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm transition-colors',
+            mobile
+              ? 'font-medium text-emerald-700 hover:bg-emerald-50'
+              : 'text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200',
+            !mobile && collapsed && 'justify-center px-2'
+          )}
+        >
+          <ArrowLeftRight className="w-4 h-4" />
+          {(mobile || !collapsed) && 'Pharmacy POS'}
+        </button>
+      )}
+      <button onClick={onLogout || logout}
+        title={!mobile && collapsed ? 'Logout' : undefined}
+        className={cn(
+          'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm transition-colors',
+          mobile
+            ? 'font-medium text-red-600 hover:bg-red-50'
+            : 'text-red-300 hover:bg-red-500/20 hover:text-red-200',
+          !mobile && collapsed && 'justify-center px-2'
+        )}
+      >
+        <LogOut className="w-4 h-4" />
+        {(mobile || !collapsed) && 'Logout'}
+      </button>
+    </div>
+  );
+
   return (
-    <div className="flex h-screen bg-slate-100 overflow-hidden">
+    <div className="flex h-screen bg-slate-100 overflow-hidden hms-shell">
+
+        {drawerOpen && (
+          <button
+            type="button"
+            className="md:hidden fixed inset-0 z-40 bg-black/40 print:hidden"
+            onClick={() => setDrawerOpen(false)}
+            aria-label="Close menu overlay"
+          />
+        )}
+
+        <aside
+          className={cn(
+            'md:hidden fixed inset-y-0 left-0 z-50 w-72 max-w-[86vw] bg-white flex flex-col shadow-2xl transition-transform duration-300 print:hidden',
+            drawerOpen ? 'translate-x-0' : '-translate-x-full'
+          )}
+        >
+          <div
+            className="flex items-center justify-between px-4 border-b border-slate-100 bg-[#0f2544] shrink-0"
+            style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(58px + env(safe-area-inset-top))' }}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <img src={logoUrl} alt="GMH Suite" className="w-8 h-8 object-contain shrink-0" />
+              <div className="min-w-0">
+                <div className="text-white font-semibold text-sm leading-tight truncate">GMH Suite</div>
+                <div className="text-blue-200 text-xs truncate">Management System</div>
+              </div>
+            </div>
+            <button onClick={() => setDrawerOpen(false)} className="p-2 -mr-2 rounded-lg text-blue-100 hover:bg-white/10" aria-label="Close menu">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <nav className="flex-1 overflow-y-auto py-3 px-3 space-y-4">
+            <NavGroups mobile onNavigate={() => setDrawerOpen(false)} />
+          </nav>
+
+          <div
+            className="p-3 border-t border-slate-100 shrink-0"
+            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)' }}
+          >
+            <BottomActions mobile onNavigate={() => setDrawerOpen(false)} />
+          </div>
+        </aside>
 
         {/* Sidebar */}
         <aside className={cn(
-          'bg-[#0f2544] flex flex-col shrink-0 print:hidden transition-all duration-300',
+          'hidden md:flex bg-[#0f2544] flex-col shrink-0 print:hidden transition-all duration-300',
           collapsed ? 'w-16' : 'w-60'
         )}>
           {/* Logo */}
@@ -124,73 +250,20 @@ export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
 
           {/* Nav */}
           <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-4">
-            {NAV.map(({ group, items }) => {
-              const visible = items.filter(i => i.roles.includes(role));
-              if (!visible.length) return null;
-              return (
-                <div key={group}>
-                  {!collapsed && (
-                    <p className="px-3 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/60">
-                      {group}
-                    </p>
-                  )}
-                  <div className="space-y-0.5">
-                    {visible.map(({ to, icon: Icon, label }) => (
-                      <NavLink
-                        key={to} to={to} end={to === '/'}
-                        title={collapsed ? label : undefined}
-                        className={({ isActive }) => cn(
-                          'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors',
-                          collapsed && 'justify-center px-2',
-                          isActive
-                            ? 'bg-blue-600 text-white'
-                            : 'text-blue-100/70 hover:text-white hover:bg-white/10'
-                        )}
-                      >
-                        <Icon className="w-4 h-4 shrink-0" />
-                        {!collapsed && label}
-                      </NavLink>
-                    ))}
-                  </div>
-                </div>
-              );
-            })}
+            <NavGroups />
           </nav>
 
           {/* Bottom actions */}
-          <div className="p-2 border-t border-white/10 space-y-0.5">
-            {/* Switch to Pharmacy POS */}
-            {(role === 'admin' || role === 'pharmacist' || role === 'cashier') && (
-              <button
-                onClick={() => onSwitchApp('pos')}
-                title={collapsed ? 'Switch to Pharmacy POS' : undefined}
-                className={cn(
-                  'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200 transition-colors',
-                  collapsed && 'justify-center px-2'
-                )}
-              >
-                <ArrowLeftRight className="w-4 h-4" />
-                {!collapsed && 'Pharmacy POS'}
-              </button>
-            )}
-            <button onClick={onLogout || logout}
-              title={collapsed ? 'Logout' : undefined}
-              className={cn(
-                'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm text-red-300 hover:bg-red-500/20 hover:text-red-200 transition-colors',
-                collapsed && 'justify-center px-2'
-              )}
-            >
-              <LogOut className="w-4 h-4" />
-              {!collapsed && 'Logout'}
-            </button>
+          <div className="p-2 border-t border-white/10">
+            <BottomActions />
           </div>
         </aside>
 
         {/* Main content */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-          <TopNavbar userEmail={userEmail} userRole={role} />
+          <TopNavbar userEmail={userEmail} userRole={role} onOpenSidebar={() => setDrawerOpen(true)} />
           <main className="flex-1 overflow-auto">
-            <div className="p-6 print:p-0 fade-in">
+            <div className="p-4 md:p-6 print:p-0 fade-in">
               <Outlet />
             </div>
           </main>

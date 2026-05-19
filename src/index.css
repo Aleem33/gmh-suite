@@ -24,3 +24,66 @@
 @media print {
   .no-print { display: none !important; }
 }
+
+@media (max-width: 767px) {
+  html,
+  body,
+  #root {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  input,
+  select,
+  textarea,
+  button {
+    min-width: 0;
+  }
+
+  .hms-shell h1,
+  .pos-shell h1 {
+    font-size: 1.35rem;
+    line-height: 1.8rem;
+  }
+
+  .hms-shell .grid.grid-cols-2,
+  .hms-shell .grid.grid-cols-3,
+  .hms-shell .grid.grid-cols-4,
+  .hms-shell .grid.grid-cols-5,
+  .hms-shell .grid.grid-cols-7,
+  .hms-shell .grid.grid-cols-12,
+  .pos-shell .grid.grid-cols-2,
+  .pos-shell .grid.grid-cols-3,
+  .pos-shell .grid.grid-cols-4,
+  .pos-shell .grid.grid-cols-5,
+  .pos-shell .grid.grid-cols-7,
+  .pos-shell .grid.grid-cols-12 {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .hms-shell table,
+  .pos-shell table {
+    min-width: 640px;
+  }
+
+  .hms-shell .rounded-xl:has(> table),
+  .hms-shell .rounded-2xl:has(> table),
+  .pos-shell .rounded-xl:has(> table),
+  .pos-shell .rounded-2xl:has(> table) {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .hms-shell .fixed.inset-0,
+  .pos-shell .fixed.inset-0 {
+    align-items: flex-end;
+    padding: 0.75rem;
+  }
+
+  .hms-shell .fixed.inset-0 > .bg-white,
+  .pos-shell .fixed.inset-0 > .bg-white {
+    max-height: 92vh;
+    border-radius: 1rem 1rem 0.75rem 0.75rem;
+  }
+}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { collection, onSnapshot, addDoc, doc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { printOrShare, printPageOrShare } from '../lib/nativeUtils';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
@@ -11,6 +12,7 @@ import {
 import { format } from 'date-fns';
 
 export function Billing() {
+  const [searchParams] = useSearchParams();
   const [medicines, setMedicines]       = useState<any[]>([]);
   const [customers, setCustomers]       = useState<any[]>([]);
   const [search, setSearch]             = useState('');
@@ -73,6 +75,21 @@ export function Billing() {
       document.removeEventListener('touchstart', handler);
     };
   }, []);
+
+  useEffect(() => {
+    const customerId = searchParams.get('customerId');
+    if (!customerId || selectedCustomer?.id === customerId) return;
+
+    const customer = customers.find(c => c.id === customerId);
+    if (!customer) return;
+
+    setSelectedCustomer(customer);
+    setCustomerType('customer');
+    setCustomerSearch('');
+    setShowCustomerDropdown(false);
+    setShowCreateForm(false);
+    setMobileTab('cart');
+  }, [customers, searchParams, selectedCustomer?.id]);
 
   const filteredMedicines = medicines.filter(m =>
     m.stock > 0 && (

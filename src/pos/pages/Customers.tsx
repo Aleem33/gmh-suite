@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, increment, query, orderBy, getDocs, where
@@ -8,11 +9,12 @@ import { formatCurrency } from '../lib/utils';
 import { printOrShare } from '../lib/nativeUtils';
 import {
   Plus, Edit2, Trash2, Search, ChevronDown, ChevronUp,
-  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Receipt, Printer
+  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Receipt, Printer, ShoppingCart
 } from 'lucide-react';
 import { format } from 'date-fns';
 
 export function Customers() {
+  const navigate = useNavigate();
   const [customers, setCustomers]       = useState<any[]>([]);
   const [sales, setSales]               = useState<any[]>([]);
   const [payments, setPayments]         = useState<any[]>([]);
@@ -295,6 +297,13 @@ export function Customers() {
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        onClick={() => navigate(`/billing?customerId=${cust.id}`)}
+                        className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"
+                        title="Start sale for this customer"
+                      >
+                        <ShoppingCart className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Sale</span>
+                      </button>
                       {(cust.creditBalance || 0) > 0 && (
                         <button
                           onClick={() => { setPaymentModal(cust); setPaymentAmount(''); setPaymentNote(''); }}

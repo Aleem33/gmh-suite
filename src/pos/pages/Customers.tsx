@@ -9,7 +9,7 @@ import { formatCurrency } from '../lib/utils';
 import { printOrShare } from '../lib/nativeUtils';
 import {
   Plus, Edit2, Trash2, Search, ChevronDown, ChevronUp,
-  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Receipt, Printer, ShoppingCart
+  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Printer, ShoppingCart
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -62,51 +62,41 @@ export function Customers() {
 
   const totalPending = filteredCustomers.reduce((sum, c) => sum + (c.creditBalance || 0), 0);
 
+  const openReceiptPayment = (cust: any, sale: any) => {
+    setPaymentModal({ customer: cust, sale });
+    setPaymentAmount('');
+    setPaymentNote('');
+  };
+
   const handleRecordPayment = async () => {
-    if (!paymentModal) return;
+    if (!paymentModal?.customer || !paymentModal?.sale) return;
     const amount = parseFloat(paymentAmount);
     if (!amount || amount <= 0) return;
-    const maxPayable = paymentModal.creditBalance || 0;
+    const sale = paymentModal.sale;
+    const customer = paymentModal.customer;
+    const maxPayable = sale.pendingAmount || 0;
     if (amount > maxPayable) return;
     setPaymentLoading(true);
     try {
       await addDoc(collection(db, 'customerPayments'), {
-        customerId: paymentModal.id, customerName: paymentModal.name,
-        amount, note: paymentNote || '', date: new Date().toISOString(),
+        customerId: customer.id,
+        customerName: customer.name,
+        saleId: sale.id,
+        amount,
+        note: paymentNote || '',
+        date: new Date().toISOString(),
       });
-      await updateDoc(doc(db, 'customers', paymentModal.id), { creditBalance: increment(-amount) });
-
-      // Clear pendingAmount on sales for this customer, oldest-due-first
-      let remaining = amount;
-      const dueSales = customerSales(paymentModal.id)
-        .filter(s => (s.pendingAmount || 0) > 0)
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()); // oldest first
-
-      for (const sale of dueSales) {
-        if (remaining <= 0) break;
-        const due = sale.pendingAmount || 0;
-        if (remaining >= due) {
-          // This sale is fully cleared
-          await updateDoc(doc(db, 'sales', sale.id), {
-            pendingAmount: 0,
-            amountPaid: sale.total,
-          });
-          remaining -= due;
-        } else {
-          // Partially cleared
-          await updateDoc(doc(db, 'sales', sale.id), {
-            pendingAmount: due - remaining,
-            amountPaid: (sale.amountPaid || 0) + remaining,
-          });
-          remaining = 0;
-        }
-      }
+      await updateDoc(doc(db, 'sales', sale.id), {
+        pendingAmount: maxPayable - amount,
+        amountPaid: Math.min(sale.total || 0, (sale.amountPaid || 0) + amount),
+      });
+      await updateDoc(doc(db, 'customers', customer.id), { creditBalance: increment(-amount) });
 
       const remainingBalance = maxPayable - amount;
       setPaymentModal(null); setPaymentAmount(''); setPaymentNote('');
       setSuccessMsg(remainingBalance <= 0
-        ? `${paymentModal.name}'s balance fully cleared!`
-        : `Rs. ${amount.toFixed(2)} recorded. Remaining: ${formatCurrency(remainingBalance)}`);
+        ? `Receipt payment cleared for ${customer.name}.`
+        : `Rs. ${amount.toFixed(2)} recorded. Receipt remaining: ${formatCurrency(remainingBalance)}`);
       setTimeout(() => setSuccessMsg(''), 5000);
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customerPayments');
@@ -167,10 +157,10 @@ export function Customers() {
       return `
         <div style="margin-bottom:14px;border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;">
           <div style="background:#f3f4f6;padding:7px 10px;display:flex;justify-content:space-between;align-items:center;">
-            <span style="font-weight:700;font-size:12px;color:#374151;">Bill #${idx + 1} &nbsp;—&nbsp; ${sale.date ? new Date(sale.date).toLocaleDateString('en-PK') : 'N/A'}</span>
+            <span style="font-weight:700;font-size:12px;color:#374151;">Bill #${idx + 1} &nbsp;â€”&nbsp; ${sale.date ? new Date(sale.date).toLocaleDateString('en-PK') : 'N/A'}</span>
             ${pending > 0
               ? `<span style="background:#fee2e2;color:#dc2626;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">DUE Rs.${pending.toFixed(2)}</span>`
-              : `<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">✓ PAID</span>`
+              : `<span style="background:#dcfce7;color:#16a34a;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700;">âœ“ PAID</span>`
             }
           </div>
           <table style="width:100%;border-collapse:collapse;">
@@ -209,7 +199,7 @@ export function Customers() {
             ? `<div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;padding:5px 8px;border-radius:4px;margin-top:4px;">
                 <span>OUTSTANDING:</span><span>Rs.${totalPending.toFixed(2)}</span>
                </div>`
-            : `<div style="text-align:center;font-size:12px;font-weight:700;color:#16a34a;background:#dcfce7;padding:5px;border-radius:4px;margin-top:4px;">✓ ALL CLEAR</div>`
+            : `<div style="text-align:center;font-size:12px;font-weight:700;color:#16a34a;background:#dcfce7;padding:5px;border-radius:4px;margin-top:4px;">âœ“ ALL CLEAR</div>`
           }
         </div>
       </div>`;
@@ -218,7 +208,7 @@ export function Customers() {
   };
 
   const payAmount  = parseFloat(paymentAmount) || 0;
-  const maxPayable = paymentModal?.creditBalance || 0;
+  const maxPayable = paymentModal?.sale?.pendingAmount || 0;
   const isPayValid = payAmount > 0 && payAmount <= maxPayable;
   const willClear  = payAmount === maxPayable;
 
@@ -304,14 +294,6 @@ export function Customers() {
                       >
                         <ShoppingCart className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Sale</span>
                       </button>
-                      {(cust.creditBalance || 0) > 0 && (
-                        <button
-                          onClick={() => { setPaymentModal(cust); setPaymentAmount(''); setPaymentNote(''); }}
-                          className="flex items-center gap-1 px-2.5 py-1.5 bg-green-600 text-white rounded-lg text-xs font-semibold hover:bg-green-700"
-                        >
-                          <Wallet className="w-3.5 h-3.5" /> Pay
-                        </button>
-                      )}
                       {customerSales(cust.id).length > 0 && (
                         <button
                           onClick={() => handlePrintAllBills(cust)}
@@ -335,7 +317,7 @@ export function Customers() {
                     <div>
                       <span className="text-xs text-gray-400">Balance: </span>
                       <span className={`text-xs font-bold ${(cust.creditBalance || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                        {(cust.creditBalance || 0) > 0 ? formatCurrency(cust.creditBalance) : '✓ Clear'}
+                        {(cust.creditBalance || 0) > 0 ? formatCurrency(cust.creditBalance) : 'âœ“ Clear'}
                       </span>
                     </div>
                     <div>
@@ -369,7 +351,7 @@ export function Customers() {
                       <p className="text-sm text-blue-400 italic">No sales recorded yet.</p>
                     ) : (
                       <>
-                        {/* ── Mobile: cards ── */}
+                        {/* â”€â”€ Mobile: cards â”€â”€ */}
                         <div className="space-y-2 md:hidden">
                           {custSales.map(sale => (
                             <div key={sale.id} className="bg-white rounded-lg border border-blue-100 p-3">
@@ -397,10 +379,18 @@ export function Customers() {
                                 <div className={`rounded p-1.5 ${(sale.pendingAmount || 0) > 0 ? 'bg-red-50' : 'bg-gray-50'}`}>
                                   <p className="text-[10px] text-gray-400">Pending</p>
                                   <p className={`text-xs font-bold ${(sale.pendingAmount || 0) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                                    {(sale.pendingAmount || 0) > 0 ? formatCurrency(sale.pendingAmount) : '✓'}
+                                    {(sale.pendingAmount || 0) > 0 ? formatCurrency(sale.pendingAmount) : 'âœ“'}
                                   </p>
                                 </div>
                               </div>
+                              {(sale.pendingAmount || 0) > 0 && (
+                                <button
+                                  onClick={() => openReceiptPayment(cust, sale)}
+                                  className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700"
+                                >
+                                  <Wallet className="w-3.5 h-3.5" /> Pay This Receipt
+                                </button>
+                              )}
                             </div>
                           ))}
                           {/* Mobile totals */}
@@ -420,7 +410,7 @@ export function Customers() {
                           </div>
                         </div>
 
-                        {/* ── Desktop: table ── */}
+                        {/* â”€â”€ Desktop: table â”€â”€ */}
                         <div className="hidden md:block rounded-lg overflow-hidden border border-blue-200 bg-white">
                           <table className="w-full text-left text-sm border-collapse">
                             <thead>
@@ -445,20 +435,28 @@ export function Customers() {
                                   <td className="p-3 text-right">
                                     {(sale.pendingAmount || 0) > 0
                                       ? <span className="font-bold text-red-600">{formatCurrency(sale.pendingAmount)}</span>
-                                      : <span className="text-green-600 text-xs font-medium">✓ Paid</span>}
+                                      : <span className="text-green-600 text-xs font-medium">âœ“ Paid</span>}
                                   </td>
                                   <td className="p-3 text-right">
-                                    <button onClick={() => setSelectedSale(sale)}
-                                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-medium">
-                                      <Eye className="w-3.5 h-3.5" /> View
-                                    </button>
+                                    <div className="flex items-center justify-end gap-2">
+                                      {(sale.pendingAmount || 0) > 0 && (
+                                        <button onClick={() => openReceiptPayment(cust, sale)}
+                                          className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700">
+                                          <Wallet className="w-3.5 h-3.5" /> Pay
+                                        </button>
+                                      )}
+                                      <button onClick={() => setSelectedSale(sale)}
+                                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-medium">
+                                        <Eye className="w-3.5 h-3.5" /> View
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               ))}
                             </tbody>
                             <tfoot>
                               <tr className="bg-blue-50 border-t-2 border-blue-200 text-xs font-bold">
-                                <td className="p-3 text-blue-800" colSpan={2}>TOTAL — {custSales.length} sale(s)</td>
+                                <td className="p-3 text-blue-800" colSpan={2}>TOTAL â€” {custSales.length} sale(s)</td>
                                 <td className="p-3 text-right text-blue-900">{formatCurrency(custSales.reduce((s, r) => s + (r.total || 0), 0))}</td>
                                 <td className="p-3 text-right text-green-700">{formatCurrency(custSales.reduce((s, r) => s + (r.amountPaid ?? r.total ?? 0), 0))}</td>
                                 <td className="p-3 text-right text-red-600">{formatCurrency(custSales.reduce((s, r) => s + (r.pendingAmount || 0), 0))}</td>
@@ -486,6 +484,7 @@ export function Customers() {
                                   <Clock className="w-3 h-3" />
                                   {p.date ? format(new Date(p.date), 'MMM dd, yyyy HH:mm') : 'N/A'}
                                 </div>
+                                {p.saleId && <p className="text-[10px] text-gray-400 mt-0.5">Receipt: {p.saleId.slice(0, 10)}...</p>}
                                 {p.note && <p className="text-xs text-gray-400 italic mt-0.5">{p.note}</p>}
                               </div>
                               <span className="font-bold text-green-700 text-sm shrink-0">+{formatCurrency(p.amount)}</span>
@@ -517,7 +516,11 @@ export function Customers() {
                                     </div>
                                   </td>
                                   <td className="p-3 text-right font-bold text-green-700">+{formatCurrency(p.amount)}</td>
-                                  <td className="p-3 text-gray-500 text-xs italic">{p.note || '—'}</td>
+                                  <td className="p-3 text-gray-500 text-xs italic">
+                                    {p.saleId && <span className="not-italic text-gray-400">Receipt {p.saleId.slice(0, 10)}...</span>}
+                                    {p.saleId && p.note ? <span className="mx-1 text-gray-300">/</span> : null}
+                                    {p.note || (!p.saleId ? '-' : '')}
+                                  </td>
                                 </tr>
                               ))}
                             </tbody>
@@ -543,14 +546,20 @@ export function Customers() {
         </div>
       </div>
 
-      {/* ── Record Payment Modal ── */}
+      {/* â”€â”€ Record Payment Modal â”€â”€ */}
       {paymentModal && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex justify-between items-start">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Record Payment</h2>
-                <p className="text-sm text-gray-500 mt-0.5">{paymentModal.name} • {paymentModal.phone}</p>
+                <p className="text-sm text-gray-500 mt-0.5">
+                  {paymentModal.customer.name}
+                  {paymentModal.customer.phone ? ` - ${paymentModal.customer.phone}` : ''}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Receipt: {paymentModal.sale.date ? format(new Date(paymentModal.sale.date), 'MMM dd, yyyy HH:mm') : 'N/A'} - ID {paymentModal.sale.id.slice(0, 10)}...
+                </p>
               </div>
               <button onClick={() => setPaymentModal(null)} className="p-1 text-gray-400 hover:text-gray-600">
                 <X className="w-5 h-5" />
@@ -558,7 +567,7 @@ export function Customers() {
             </div>
             <div className="p-5 space-y-4">
               <div className="bg-red-50 border border-red-100 rounded-lg p-4 flex justify-between items-center">
-                <span className="text-sm font-medium text-red-800">Outstanding Balance</span>
+                <span className="text-sm font-medium text-red-800">Receipt Pending</span>
                 <span className="text-xl font-bold text-red-700">{formatCurrency(maxPayable)}</span>
               </div>
               <div>
@@ -596,7 +605,7 @@ export function Customers() {
                   <div className="flex justify-between text-sm mt-1">
                     <span className="text-gray-600">Remaining after payment:</span>
                     <span className={`font-bold ${willClear ? 'text-green-700' : 'text-red-600'}`}>
-                      {willClear ? '✓ Fully Cleared' : formatCurrency(maxPayable - payAmount)}
+                      {willClear ? 'âœ“ Fully Cleared' : formatCurrency(maxPayable - payAmount)}
                     </span>
                   </div>
                 </div>
@@ -607,7 +616,7 @@ export function Customers() {
                 <button onClick={handleRecordPayment} disabled={!isPayValid || paymentLoading}
                   className="flex-1 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2">
                   <Wallet className="w-4 h-4" />
-                  {paymentLoading ? 'Saving…' : 'Record Payment'}
+                  {paymentLoading ? 'Savingâ€¦' : 'Record Payment'}
                 </button>
               </div>
             </div>
@@ -615,7 +624,7 @@ export function Customers() {
         </div>
       )}
 
-      {/* ── Add / Edit Customer Modal ── */}
+      {/* â”€â”€ Add / Edit Customer Modal â”€â”€ */}
       {isModalOpen && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
@@ -657,7 +666,7 @@ export function Customers() {
         </div>
       )}
 
-      {/* ── Sale Detail Modal ── */}
+      {/* â”€â”€ Sale Detail Modal â”€â”€ */}
       {selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
@@ -666,7 +675,7 @@ export function Customers() {
                 <h2 className="text-lg font-bold text-gray-900">Sale Details</h2>
                 <p className="text-sm text-gray-500 mt-0.5">
                   {selectedSale.date ? format(new Date(selectedSale.date), 'MMM dd, yyyy HH:mm') : 'N/A'}
-                  {' '}• ID: {selectedSale.id.slice(0, 10)}…
+                  {' '}â€¢ ID: {selectedSale.id.slice(0, 10)}â€¦
                 </p>
               </div>
               <button onClick={() => setSelectedSale(null)}
@@ -683,7 +692,7 @@ export function Customers() {
                       <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${item.sellType === 'box' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>
                         {item.sellType}
                       </span>
-                      <span className="text-xs text-gray-400">{formatCurrency(item.price)} × {item.quantity}</span>
+                      <span className="text-xs text-gray-400">{formatCurrency(item.price)} Ã— {item.quantity}</span>
                       {item.itemDiscount > 0 && <span className="text-xs text-orange-600">-{formatCurrency(item.itemDiscount)}</span>}
                     </div>
                   </div>
@@ -712,9 +721,23 @@ export function Customers() {
                   <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg">
                     <span>Pending</span><span>{formatCurrency(selectedSale.pendingAmount)}</span>
                   </div>
+                  {customers.find(c => c.id === selectedSale.customerId) && (
+                    <button
+                      onClick={() => {
+                        const cust = customers.find(c => c.id === selectedSale.customerId);
+                        if (cust) {
+                          setSelectedSale(null);
+                          openReceiptPayment(cust, selectedSale);
+                        }
+                      }}
+                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700"
+                    >
+                      <Wallet className="w-4 h-4" /> Pay This Receipt
+                    </button>
+                  )}
                 </>
               ) : (
-                <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">✓ Fully Paid</div>
+                <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">âœ“ Fully Paid</div>
               )}
             </div>
           </div>

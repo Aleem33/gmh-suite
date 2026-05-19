@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 gmh-suite/
+.firebase/
 firebase-applet-config.json
 .env
 .env.*

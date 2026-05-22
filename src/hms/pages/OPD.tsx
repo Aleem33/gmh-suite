@@ -221,7 +221,7 @@ export function OPD() {
     try {
       for (let i = 0; i < toPrint.length; i++) {
         const c = toPrint[i];
-        const rx = withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(c.prescriptions || []));
+        const rx = await preparePrescriptionRows(c.prescriptions || []);
         printPrescription({
           hospitalName: 'GMH Suite', patientName: c.patientName, patientMRN: c.patientMRN,
           patientAge: c.patientAge, patientGender: c.patientGender,
@@ -276,6 +276,15 @@ export function OPD() {
   const filteredPatients = patients.filter(p => !patientSearch || p.name?.toLowerCase().includes(patientSearch.toLowerCase()) || p.mrn?.includes(patientSearch)).slice(0, 5);
   const filteredMeds = medicines.filter(m => medSearch && m.name?.toLowerCase().includes(medSearch.toLowerCase()) && m.stock > 0).slice(0, 5);
   const filteredLabTests = labTests.filter(t => labSearch && t.name?.toLowerCase().includes(labSearch.toLowerCase())).slice(0, 5);
+
+  const preparePrescriptionRows = async (rows: any[]) => {
+    const fromInventory = rows.map((rx: any) => {
+      if (rx.nameUrdu?.trim()) return rx;
+      const med = medicines.find((m: any) => m.id === rx.medicineId || m.name === rx.name);
+      return med?.nameUrdu ? { ...rx, nameUrdu: med.nameUrdu } : rx;
+    });
+    return withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(fromInventory));
+  };
 
   const selectPatient = (p: any) => {
     setForm(prev => ({ ...prev, patientId: p.id, patientName: p.name, patientMRN: p.mrn, patientAge: String(p.age), patientGender: p.gender }));
@@ -415,7 +424,7 @@ export function OPD() {
   const printConsultation = async (consult: any) => {
     setTranslating(true);
     try {
-      const rx = withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(consult.prescriptions || []));
+      const rx = await preparePrescriptionRows(consult.prescriptions || []);
       printPrescription({
         hospitalName: 'GMH Suite',
         hospitalAddress: '',
@@ -453,7 +462,7 @@ export function OPD() {
       const { bp, temperature, weight, pulse, spo2, appointmentId, paidAmount, paymentMethod, ...formRest } = form;
       const vitals = { bp, temperature, weight, pulse, spo2 };
       const fee = Number(form.fee) || 0;
-      const prescriptionPayload = withPrescriptionListUrdu(prescriptions);
+      const prescriptionPayload = await preparePrescriptionRows(prescriptions);
 
       // Save consultation
       const data = { ...formRest, fee, prescriptions: prescriptionPayload, labOrders, vitals, appointmentId: appointmentId || '', createdAt: nowISO() };

@@ -16,6 +16,7 @@ export function Prescriptions() {
   const [loading, setLoading] = useState(true);
   const [hospitalSettings, setHospitalSettings] = useState({ name: 'GMH Suite', address: '', phone: '' });
   const [pharmacySentIds, setPharmacySentIds] = useState<Set<string>>(new Set());
+  const [medicines, setMedicines] = useState<any[]>([]);
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'hospital')).then(snap => {
@@ -23,6 +24,9 @@ export function Prescriptions() {
     });
     const unsubPharm = onSnapshot(collection(db, 'pharmacyOrders'), snap => {
       setPharmacySentIds(new Set(snap.docs.map(d => d.data().consultationId).filter(Boolean)));
+    });
+    const unsubMeds = onSnapshot(collection(db, 'medicines'), snap => {
+      setMedicines(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
     const unsub = onSnapshot(collection(db, 'consultations'), snap => {
       setConsultations(
@@ -33,7 +37,7 @@ export function Prescriptions() {
       );
       setLoading(false);
     });
-    return () => { unsubPharm(); unsub(); };
+    return () => { unsubPharm(); unsubMeds(); unsub(); };
   }, []);
 
   const filtered = consultations.filter(c =>
@@ -59,7 +63,12 @@ export function Prescriptions() {
   };
 
   const handlePrint = async (c: any) => {
-    const prescriptions = withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(c.prescriptions || []));
+    const fromInventory = (c.prescriptions || []).map((rx: any) => {
+      if (rx.nameUrdu?.trim()) return rx;
+      const med = medicines.find((m: any) => m.id === rx.medicineId || m.name === rx.name);
+      return med?.nameUrdu ? { ...rx, nameUrdu: med.nameUrdu } : rx;
+    });
+    const prescriptions = withPrescriptionListUrdu(await transliteratePrescriptionMedicineNames(fromInventory));
     printPrescription({
       hospitalName: hospitalSettings.name,
       hospitalAddress: hospitalSettings.address,

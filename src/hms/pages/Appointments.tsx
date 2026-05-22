@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, updateDoc, doc, getDoc, query, where, getDocs } from 'firebase/firestore';
-import { db, auth, getNextMRN } from '../../firebase';
+import { db, auth, getNextMRN, getNextBillNo } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
 import { useNavigate } from 'react-router-dom';
 import {
-  Plus, Search, X, CheckCircle, XCircle, Clock, CalendarDays,
+  Plus, Search, X, XCircle, Clock, CalendarDays,
   ChevronLeft, ChevronRight, LayoutList, UserPlus, User, Stethoscope,
 } from 'lucide-react';
 import {
@@ -21,18 +21,21 @@ const BLOOD_GROUPS = ['A+','A-','B+','B-','AB+','AB-','O+','O-','Unknown'];
 function StatusBadge({ s }: { s: string }) {
   const map: Record<string,string> = {
     scheduled: 'bg-blue-100 text-blue-700',
+    vitals_pending: 'bg-amber-100 text-amber-700',
+    vitals_done: 'bg-purple-100 text-purple-700',
+    in_consultation: 'bg-indigo-100 text-indigo-700',
     completed: 'bg-green-100 text-green-700',
     cancelled: 'bg-red-100 text-red-700',
     'no-show': 'bg-gray-100 text-gray-600',
   };
-  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${map[s] || map['scheduled']}`}>{s}</span>;
+  return <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${map[s] || map['scheduled']}`}>{(s || 'scheduled').replace(/_/g, ' ')}</span>;
 }
 
 function CalendarCell({ date, appointments, currentMonth, onDayClick, todayDate }: any) {
   const isToday = isSameDay(date, todayDate);
   const isCurrentMonth = isSameMonth(date, currentMonth);
   const dayAppts = appointments.filter((a: any) => { try { return isSameDay(parseISO(a.date), date); } catch { return false; } });
-  const colorByStatus = (s: string) => s === 'completed' ? 'bg-green-500' : s === 'cancelled' ? 'bg-red-400' : s === 'no-show' ? 'bg-gray-400' : 'bg-blue-500';
+  const colorByStatus = (s: string) => s === 'completed' ? 'bg-green-500' : s === 'cancelled' ? 'bg-red-400' : s === 'no-show' ? 'bg-gray-400' : s === 'vitals_pending' ? 'bg-amber-500' : s === 'vitals_done' ? 'bg-purple-500' : s === 'in_consultation' ? 'bg-indigo-500' : 'bg-blue-500';
   return (
     <div onClick={() => onDayClick(date)}
       className={cn('min-h-[80px] p-1.5 border-b border-r border-gray-100 cursor-pointer hover:bg-blue-50/50 transition-colors', !isCurrentMonth && 'bg-gray-50/60')}>
@@ -81,10 +84,9 @@ export function Appointments() {
   // Appointment form
   const [apptForm, setApptForm] = useState({
     doctorId: '', doctorName: '', department: 'General Medicine',
-    date: today(), time: '09:00', type: 'OPD', fee: consultationFee, notes: '',
+    date: today(), time: '09:00', type: 'OPD', fee: consultationFee, paidAmount: consultationFee, paymentMethod: 'Cash', notes: '',
   });
 
-  // Vitals
   const [vitals, setVitals] = useState({ bp: '', temperature: '', weight: '', pulse: '', spo2: '' });
 
   useEffect(() => {
@@ -100,7 +102,7 @@ export function Appointments() {
     getDoc(doc(db, 'settings', 'hospital')).then(snap => {
       if (snap.exists() && snap.data().consultationFee) {
         setConsultationFee(String(snap.data().consultationFee));
-        setApptForm(f => ({ ...f, fee: String(snap.data().consultationFee) }));
+        setApptForm(f => ({ ...f, fee: String(snap.data().consultationFee), paidAmount: String(snap.data().consultationFee) }));
       }
     });
     // Determine current user's staff record and role
@@ -143,8 +145,7 @@ export function Appointments() {
     setPatientSearch('');
     setPatientMode('search');
     setNewPt({ name: '', age: '', gender: 'Male', phone: '', address: '', bloodGroup: 'Unknown', allergies: '' });
-    setApptForm({ doctorId: '', doctorName: '', department: 'General Medicine', date: today(), time: '09:00', type: 'OPD', fee: consultationFee, notes: '' });
-    setVitals({ bp: '', temperature: '', weight: '', pulse: '', spo2: '' });
+    setApptForm({ doctorId: '', doctorName: '', department: 'General Medicine', date: today(), time: '09:00', type: 'OPD', fee: consultationFee, paidAmount: consultationFee, paymentMethod: 'Cash', notes: '' });
     setError('');
     setShowModal(true);
   };
@@ -161,7 +162,7 @@ export function Appointments() {
     if (apptForm.doctorId) {
       const conflict = visibleAppointments.find(a =>
         a.doctorId === apptForm.doctorId && a.date === apptForm.date &&
-        a.time === apptForm.time && a.status === 'scheduled'
+        a.time === apptForm.time && !['cancelled', 'no-show', 'completed'].includes(a.status)
       );
       if (conflict) { setError(`⚠ Dr. ${apptForm.doctorName} already has an appointment at ${apptForm.time} on this date.`); return; }
     }
@@ -184,13 +185,33 @@ export function Appointments() {
       }
 
       const tokenNo = appointments.filter(a => a.date === apptForm.date).length + 1;
+      const fee = Number(apptForm.fee) || 0;
+      const paid = Math.min(Number(apptForm.paidAmount) || 0, fee);
+      const balance = Math.max(0, fee - paid);
+      const paymentStatus = paid >= fee ? 'paid' : paid > 0 ? 'partial' : 'pending';
 
-      // Save appointment with vitals
       const apptRef = await addDoc(collection(db, 'appointments'), {
-        ...apptForm, fee: Number(apptForm.fee), tokenNo,
+        ...apptForm, fee, paidAmount: paid, tokenNo,
         patientId, patientName, patientMRN, patientAge, patientGender,
-        vitals, status: 'scheduled', createdAt: nowISO(),
+        vitals, status: 'vitals_pending', checkedInAt: nowISO(), createdAt: nowISO(),
       });
+      if (fee > 0) {
+        const billNo = await getNextBillNo();
+        const billRef = await addDoc(collection(db, 'bills'), {
+          billNo,
+          patientId, patientName, patientMRN,
+          date: apptForm.date,
+          items: [{ description: `OPD Consultation - ${apptForm.department}`, category: 'Consultation', quantity: 1, rate: fee, amount: fee }],
+          subtotal: fee, discount: 0, total: fee,
+          paid, balance, paymentStatus, paymentMethod: apptForm.paymentMethod,
+          appointmentId: apptRef.id,
+          cashierId: auth.currentUser?.uid || '',
+          cashierName: auth.currentUser?.email || '',
+          createdAt: nowISO(),
+        });
+        await updateDoc(doc(db, 'appointments', apptRef.id), { billId: billRef.id, billNo, updatedAt: nowISO() });
+        await logAudit('create', 'bill', billRef.id, `${billNo} - ${patientName} - Rs.${fee} (Reception OPD)`);
+      }
       await logAudit('create', 'appointment', apptRef.id, `${patientName} — ${apptForm.date} ${apptForm.time}`);
 
       setShowModal(false);
@@ -230,6 +251,7 @@ export function Appointments() {
       notes: appt.notes || '',
       vitals: appt.vitals || {},
     }));
+    updateDoc(doc(db, 'appointments', appt.id), { status: 'in_consultation', consultationStartedAt: nowISO(), updatedAt: nowISO() }).catch(console.error);
     navigate('/opd');
   };
 
@@ -250,7 +272,7 @@ export function Appointments() {
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Appointments</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Reception Check-In</h1>
           <p className="text-sm text-gray-500">
             Today: {completedToday}/{todayCount} completed
             {currentRole === 'doctor' && ' · Showing your appointments only'}
@@ -266,7 +288,7 @@ export function Appointments() {
             </button>
           </div>
           <button onClick={openAdd} className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-blue-700">
-            <Plus className="w-4 h-4" /> New Appointment
+            <Plus className="w-4 h-4" /> Check In Patient
           </button>
         </div>
       </div>
@@ -318,10 +340,11 @@ export function Appointments() {
                     <td className="px-4 py-3"><StatusBadge s={a.status} /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <button onClick={() => sendToOPD(a)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg" title="Send to OPD"><Stethoscope className="w-4 h-4" /></button>
-                        {a.status === 'scheduled' && (
+                        {['vitals_done', 'in_consultation'].includes(a.status) && (
+                          <button onClick={() => sendToOPD(a)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg" title="Open OPD"><Stethoscope className="w-4 h-4" /></button>
+                        )}
+                        {['scheduled', 'vitals_pending', 'vitals_done', 'in_consultation'].includes(a.status) && (
                           <>
-                            <button onClick={() => updateStatus(a.id, 'completed')} className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg" title="Complete"><CheckCircle className="w-4 h-4" /></button>
                             <button onClick={() => updateStatus(a.id, 'cancelled')} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg" title="Cancel"><XCircle className="w-4 h-4" /></button>
                             <button onClick={() => updateStatus(a.id, 'no-show')} className="p-1.5 text-gray-400 hover:bg-gray-100 rounded-lg" title="No Show"><Clock className="w-4 h-4" /></button>
                           </>
@@ -379,10 +402,11 @@ export function Appointments() {
                     </div>
                     <StatusBadge s={a.status} />
                   </div>
-                  {a.status === 'scheduled' && (
+                  {['scheduled', 'vitals_pending', 'vitals_done', 'in_consultation'].includes(a.status) && (
                     <div className="flex gap-1.5 mt-2">
-                      <button onClick={() => sendToOPD(a)} className="flex-1 text-xs bg-blue-50 text-blue-700 py-1 rounded-lg hover:bg-blue-100 font-medium">OPD</button>
-                      <button onClick={() => updateStatus(a.id, 'completed')} className="flex-1 text-xs bg-green-50 text-green-700 py-1 rounded-lg hover:bg-green-100 font-medium">Done</button>
+                      {['vitals_done', 'in_consultation'].includes(a.status) && (
+                        <button onClick={() => sendToOPD(a)} className="flex-1 text-xs bg-blue-50 text-blue-700 py-1 rounded-lg hover:bg-blue-100 font-medium">OPD</button>
+                      )}
                       <button onClick={() => updateStatus(a.id, 'cancelled')} className="flex-1 text-xs bg-red-50 text-red-700 py-1 rounded-lg hover:bg-red-100 font-medium">Cancel</button>
                     </div>
                   )}
@@ -398,7 +422,7 @@ export function Appointments() {
         <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
           <div className="bg-white rounded-2xl w-full max-w-xl my-4">
             <div className="flex items-center justify-between p-5 border-b border-gray-100 sticky top-0 bg-white rounded-t-2xl">
-              <h2 className="font-semibold text-gray-900">New Appointment</h2>
+              <h2 className="font-semibold text-gray-900">Reception Check-In</h2>
               <button onClick={() => setShowModal(false)} className="p-1 text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-5 space-y-5">
@@ -551,6 +575,18 @@ export function Appointments() {
                     <input type="number" value={apptForm.fee} onChange={e => af('fee', e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
                   </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Amount Received (Rs.)</label>
+                    <input type="number" value={apptForm.paidAmount} onChange={e => af('paidAmount', e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
+                    <select value={apptForm.paymentMethod} onChange={e => af('paymentMethod', e.target.value)}
+                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                      {['Cash','Card','Online Transfer','Cheque','Free'].map(m => <option key={m}>{m}</option>)}
+                    </select>
+                  </div>
                   <div className="col-span-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
                     <textarea value={apptForm.notes} onChange={e => af('notes', e.target.value)} rows={2}
@@ -566,7 +602,7 @@ export function Appointments() {
             <div className="flex gap-3 px-5 pb-5">
               <button onClick={() => setShowModal(false)} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50">Cancel</button>
               <button onClick={handleSave} disabled={saving} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-60">
-                {saving ? 'Saving...' : 'Book Appointment'}
+                {saving ? 'Saving...' : 'Check In & Create Bill'}
               </button>
             </div>
           </div>

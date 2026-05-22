@@ -6,6 +6,7 @@ import { Dashboard } from './pages/Dashboard';
 import { Patients } from './pages/Patients';
 import { Appointments } from './pages/Appointments';
 import { OPD } from './pages/OPD';
+import { VitalsQueue } from './pages/VitalsQueue';
 import { IPD } from './pages/IPD';
 import { Lab } from './pages/Lab';
 import { Pharmacy } from './pages/Pharmacy';
@@ -39,20 +40,24 @@ export function HMSApp({ userRole, userEmail, onSwitchApp, onLoginSuccess, onBac
 
   const r = userRole;
   const isAdmin = r === 'admin';
-  const clinical = ['admin', 'receptionist', 'doctor'];
+  const clinical = ['admin', 'receptionist', 'doctor', 'nurse'];
+  const dashboardRoles = ['admin', 'receptionist', 'doctor'];
   const defaultPath =
     r === 'pharmacist'     ? '/pharmacy' :
     r === 'lab_technician' ? '/lab'      :
-    r === 'cashier'        ? '/billing'  : '/';
+    r === 'cashier'        ? '/billing'  :
+    r === 'nurse'          ? '/vitals'   : '/';
 
   return (
     <ErrorBoundary>
       <HashRouter>
         <Routes>
           <Route path="/" element={<Layout role={r} userEmail={userEmail} onSwitchApp={onSwitchApp} onLogout={onLogout} />}>
-            {clinical.includes(r) && <Route index element={<Dashboard />} />}
+            {dashboardRoles.includes(r) && <Route index element={<Dashboard />} />}
+            {r === 'nurse' && <Route index element={<Navigate to="/vitals" replace />} />}
             {clinical.includes(r) && <Route path="patients"     element={<Patients />} />}
             {clinical.includes(r) && <Route path="appointments" element={<Appointments />} />}
+            {['admin','receptionist','doctor','nurse'].includes(r) && <Route path="vitals" element={<VitalsQueue />} />}
             {clinical.includes(r) && <Route path="opd"          element={<OPD />} />}
             {clinical.includes(r) && <Route path="ipd"          element={<IPD />} />}
             {clinical.includes(r) && <Route path="token"        element={<TokenDisplay />} />}

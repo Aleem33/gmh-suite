@@ -153,6 +153,63 @@ export function printPrescription(data: PrescriptionPrintData) {
   printHTML(buildPreprintedPrescriptionHTML(data));
 }
 
+export function printVitalsSlip(appt: {
+  tokenNo?: number | string;
+  patientName?: string;
+  patientMRN?: string;
+  patientAge?: string;
+  patientGender?: string;
+  doctorName?: string;
+  department?: string;
+  date?: string;
+  time?: string;
+  vitals?: { bp?: string; temperature?: string; weight?: string; pulse?: string; spo2?: string; complaint?: string; notes?: string };
+}) {
+  const v = appt.vitals || {};
+  const vitalRows = [
+    ['BP', v.bp, 'mmHg'],
+    ['Temp', v.temperature, 'F'],
+    ['Weight', v.weight, 'kg'],
+    ['Pulse', v.pulse, 'bpm'],
+    ['SpO2', v.spo2, '%'],
+  ].filter(([, value]) => value).map(([label, value, unit]) => `
+    <div class="row"><span>${esc(label)}</span><strong>${esc(value)} ${esc(unit)}</strong></div>
+  `).join('');
+
+  const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"/>
+<title>Vitals Slip</title>
+<style>
+@page{margin:10mm;size:80mm auto;}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{font-family:Arial,sans-serif;font-size:11px;color:#111;width:72mm;}
+.center{text-align:center}.clinic{font-size:16px;font-weight:900;color:#1a237e}
+.divider{border-top:1px dashed #9ca3af;margin:8px 0}
+.row{display:flex;justify-content:space-between;gap:8px;padding:3px 0}
+.label{color:#6b7280}.token{font-size:24px;font-weight:900;color:#1a237e}
+.box{border:1px solid #e5e7eb;border-radius:6px;padding:7px;margin-top:7px}
+.small{font-size:9px;color:#6b7280;line-height:1.35}
+</style></head><body>
+<div class="center">
+  <div class="clinic">GMH Suite</div>
+  <div class="small">Vitals Report</div>
+  <div class="token">Token ${esc(appt.tokenNo || '-')}</div>
+</div>
+<div class="divider"></div>
+<div class="row"><span class="label">Patient</span><strong>${esc(appt.patientName || '')}</strong></div>
+<div class="row"><span class="label">MRN</span><span>${esc(appt.patientMRN || '')}</span></div>
+<div class="row"><span class="label">Age/Gender</span><span>${esc(appt.patientAge || '-')} / ${esc(appt.patientGender || '-')}</span></div>
+<div class="row"><span class="label">Doctor</span><span>${esc(appt.doctorName || '-')}</span></div>
+<div class="row"><span class="label">Date</span><span>${esc(appt.date || '')} ${esc(appt.time || '')}</span></div>
+<div class="divider"></div>
+${vitalRows || '<div class="small center">No vitals recorded</div>'}
+${v.complaint ? `<div class="box"><div class="label small">Complaint</div><div>${esc(v.complaint)}</div></div>` : ''}
+${v.notes ? `<div class="box"><div class="label small">Notes</div><div>${esc(v.notes)}</div></div>` : ''}
+<div class="divider"></div>
+<div class="center small">Take this slip to the doctor</div>
+</body></html>`;
+  printHTML(html);
+}
+
 // BILL
 export function printBill(data: {
   billNo: string; date: string; patientName: string; patientMRN: string;

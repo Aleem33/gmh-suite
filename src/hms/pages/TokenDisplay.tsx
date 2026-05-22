@@ -29,8 +29,8 @@ export function TokenDisplay() {
     return () => unsub();
   }, []);
 
-  const waiting  = appointments.filter((a: any) => a.status === 'scheduled' || a.status === 'waiting');
-  const serving  = appointments.filter((a: any) => a.status === 'serving');
+  const waiting  = appointments.filter((a: any) => a.status === 'scheduled' || a.status === 'waiting' || a.status === 'vitals_pending' || a.status === 'vitals_done');
+  const serving  = appointments.filter((a: any) => a.status === 'serving' || a.status === 'in_consultation');
   const done     = appointments.filter((a: any) => a.status === 'done' || a.status === 'completed');
   const current  = serving[0] || null;
   const next     = waiting.slice(0, 4);
@@ -40,9 +40,9 @@ export function TokenDisplay() {
     setCalling(waiting[0].id);
     try {
       // Mark current as done
-      if (current) await updateDoc(doc(db, 'appointments', current.id), { status: 'done' });
+      if (current) await updateDoc(doc(db, 'appointments', current.id), { status: 'completed' });
       // Call next
-      await updateDoc(doc(db, 'appointments', waiting[0].id), { status: 'serving' });
+      await updateDoc(doc(db, 'appointments', waiting[0].id), { status: 'in_consultation' });
     } finally {
       setCalling(null);
     }
@@ -137,7 +137,7 @@ export function TokenDisplay() {
           ) : appointments.map((a: any) => (
             <div key={a.id} className="flex items-center gap-3 px-5 py-3">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
-                a.status === 'serving' ? 'bg-blue-600 text-white' :
+                a.status === 'serving' || a.status === 'in_consultation' ? 'bg-blue-600 text-white' :
                 a.status === 'done' || a.status === 'completed' ? 'bg-green-100 text-green-600' :
                 'bg-gray-100 text-gray-600'
               }`}>{a.tokenNo || '?'}</div>
@@ -146,7 +146,7 @@ export function TokenDisplay() {
                 <div className="text-xs text-gray-400">{a.type} · {a.doctorName || '—'}</div>
               </div>
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium capitalize ${
-                a.status === 'serving' ? 'bg-blue-100 text-blue-700' :
+                a.status === 'serving' || a.status === 'in_consultation' ? 'bg-blue-100 text-blue-700' :
                 a.status === 'done' || a.status === 'completed' ? 'bg-green-100 text-green-700' :
                 'bg-yellow-100 text-yellow-700'
               }`}>{a.status || 'waiting'}</span>

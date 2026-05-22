@@ -6,7 +6,7 @@ import {
   FlaskConical, Pill, Receipt, UserCog, BarChart3,
   Settings as SettingsIcon, LogOut, Truck,
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
-  Shield, CalendarCheck, Hotel, ArrowLeftRight, Monitor, BookOpen,
+  Shield, CalendarCheck, Hotel, ArrowLeftRight, Monitor, BookOpen, Activity,
   X,
 } from 'lucide-react';
 import { logout } from '../../firebase';
@@ -18,10 +18,11 @@ const NAV = [
     group: 'Clinical',
     items: [
       { to: '/',                       icon: LayoutDashboard, label: 'Dashboard',         roles: ['admin','receptionist','doctor'] },
-      { to: '/patients',               icon: Users,           label: 'Patients',           roles: ['admin','receptionist','doctor'] },
-      { to: '/appointments',           icon: CalendarDays,    label: 'Appointments',       roles: ['admin','receptionist','doctor'] },
-      { to: '/token',                  icon: Monitor,         label: 'Token Display',      roles: ['admin','receptionist','doctor'] },
-      { to: '/opd',                    icon: Stethoscope,     label: 'OPD',                roles: ['admin','receptionist','doctor'] },
+      { to: '/patients',               icon: Users,           label: 'Patients',           roles: ['admin','receptionist','doctor','nurse'] },
+      { to: '/appointments',           icon: CalendarDays,    label: 'Reception',          roles: ['admin','receptionist'] },
+      { to: '/vitals',                 icon: Activity,        label: 'Vitals Queue',       roles: ['admin','receptionist','doctor','nurse'] },
+      { to: '/token',                  icon: Monitor,         label: 'Token Display',      roles: ['admin','receptionist','doctor','nurse'] },
+      { to: '/opd',                    icon: Stethoscope,     label: 'OPD',                roles: ['admin','doctor'] },
       { to: '/prescriptions',          icon: ClipboardList,   label: 'Prescriptions',      roles: ['admin','doctor'] },
       { to: '/prescription-templates', icon: BookOpen,        label: 'Rx Templates',       roles: ['admin','doctor'] },
       { to: '/ipd',                    icon: BedDouble,       label: 'IPD',                roles: ['admin','receptionist','doctor'] },

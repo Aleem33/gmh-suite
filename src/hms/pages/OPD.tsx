@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, doc, updateDoc, getDoc, query, where, getDocs } from 'firebase/firestore';
-import { db, auth, getNextBillNo } from '../../firebase';
+import { db, auth } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
 import { Plus, Search, X, Stethoscope, FlaskConical, Printer, Eye, ArrowRight, Send, Loader2, History, ChevronDown, ChevronUp, RotateCcw, Clock, Pill, BookOpen, MessageCircle, CheckSquare, Square, TrendingUp } from 'lucide-react';
@@ -27,6 +27,7 @@ export function OPD() {
   const { alert } = useAppDialog();
   const navigate = useNavigate();
   const [consultations, setConsultations] = useState<any[]>([]);
+  const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
   const [labTests, setLabTests] = useState<any[]>([]);
@@ -78,6 +79,7 @@ export function OPD() {
     const u4 = onSnapshot(collection(db, 'labTests'), snap => setLabTests(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const u5 = onSnapshot(collection(db, 'medicines'), snap => setMedicines(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const u6 = onSnapshot(collection(db, 'prescriptionTemplates'), snap => setTemplates(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const u8 = onSnapshot(collection(db, 'appointments'), snap => setAppointments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     // Determine current user role and doctor ID
     getDoc(doc(db, 'users', auth.currentUser?.uid || 'x')).then(snap => {
       if (snap.exists()) {
@@ -133,7 +135,7 @@ export function OPD() {
       setPharmacySentIds(new Set(snap.docs.map(d => d.data().consultationId).filter(Boolean)));
     });
 
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); };
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); };
   }, []);
 
   useEffect(() => {
@@ -257,6 +259,11 @@ export function OPD() {
 
 
   const todayStr = today();
+  const readyAppointments = appointments
+    .filter((a: any) => a.date === todayStr && ['vitals_done', 'in_consultation'].includes(a.status))
+    .filter((a: any) => currentRole === 'doctor' && currentDoctorId ? a.doctorId === currentDoctorId : true)
+    .filter((a: any) => !consultations.some((c: any) => c.appointmentId === a.id))
+    .sort((a: any, b: any) => (a.tokenNo || 9999) - (b.tokenNo || 9999));
   const visibleConsultations = currentRole === 'doctor' && currentDoctorId
     ? consultations.filter(c => c.doctorId === currentDoctorId)
     : consultations;
@@ -277,6 +284,48 @@ export function OPD() {
     setHistoryError('');
     // Filter directly from already-loaded consultations state — no extra Firestore call needed
     setPatientHistory(getPatientHistory(consultations, p.id));
+  };
+
+  const openAppointmentForConsultation = async (appt: any) => {
+    setForm(prev => ({
+      ...prev,
+      patientId: appt.patientId || '',
+      patientName: appt.patientName || '',
+      patientMRN: appt.patientMRN || '',
+      patientAge: appt.patientAge || '',
+      patientGender: appt.patientGender || '',
+      doctorId: appt.doctorId || '',
+      doctorName: appt.doctorName || '',
+      department: appt.department || 'General Medicine',
+      date: appt.date || today(),
+      complaints: appt.vitals?.complaint || appt.notes || '',
+      diagnosis: '',
+      notes: appt.vitals?.notes || '',
+      followUpDate: '',
+      fee: String(appt.fee || '0'),
+      paidAmount: String(appt.paidAmount || '0'),
+      paymentMethod: appt.paymentMethod || 'Cash',
+      appointmentId: appt.id,
+      bp: appt.vitals?.bp || '',
+      temperature: appt.vitals?.temperature || '',
+      weight: appt.vitals?.weight || '',
+      pulse: appt.vitals?.pulse || '',
+      spo2: appt.vitals?.spo2 || '',
+    }));
+    setPrescriptions([]);
+    setLabOrders([]);
+    setError('');
+    setPatientSearch('');
+    setMedSearch('');
+    setLabSearch('');
+    setModalTab('prescription');
+    setPatientHistory(getPatientHistory(consultations, appt.patientId));
+    setExpandedVisit(null);
+    setHistoryError('');
+    setShowModal(true);
+    if (appt.status !== 'in_consultation') {
+      await updateDoc(doc(db, 'appointments', appt.id), { status: 'in_consultation', consultationStartedAt: nowISO(), updatedAt: nowISO() });
+    }
   };
 
   const addPrescription = async (med: any) => {
@@ -404,9 +453,6 @@ export function OPD() {
       const { bp, temperature, weight, pulse, spo2, appointmentId, paidAmount, paymentMethod, ...formRest } = form;
       const vitals = { bp, temperature, weight, pulse, spo2 };
       const fee = Number(form.fee) || 0;
-      const paid = Math.min(Number(paidAmount) || 0, fee);
-      const balance = Math.max(0, fee - paid);
-      const paymentStatus = paid >= fee ? 'paid' : paid > 0 ? 'partial' : 'pending';
       const prescriptionPayload = withPrescriptionListUrdu(prescriptions);
 
       // Save consultation
@@ -414,21 +460,17 @@ export function OPD() {
       const ref = await addDoc(collection(db, 'consultations'), data);
       await logAudit('create', 'consultation', ref.id, `${form.patientName} — ${form.diagnosis || form.complaints.slice(0, 40)}`);
 
-      // Auto-generate bill from OPD consultation
-      if (fee > 0) {
-        const billNo = await getNextBillNo();
-        await addDoc(collection(db, 'bills'), {
-          billNo,
-          patientId: form.patientId, patientName: form.patientName, patientMRN: form.patientMRN,
-          date: form.date,
-          items: [{ description: `OPD Consultation — ${form.department}`, category: 'Consultation', quantity: 1, rate: fee, amount: fee }],
-          subtotal: fee, discount: 0, total: fee,
-          paid, balance, paymentStatus, paymentMethod,
-          consultationId: ref.id, appointmentId: appointmentId || '',
-          cashierId: auth.currentUser?.uid || '',
-          createdAt: nowISO(),
+      if (appointmentId) {
+        await updateDoc(doc(db, 'appointments', appointmentId), {
+          status: 'completed',
+          consultationId: ref.id,
+          completedAt: nowISO(),
+          updatedAt: nowISO(),
         });
-        await logAudit('create', 'bill', billNo, `${billNo} — ${form.patientName} — Rs.${fee} (OPD)`);
+        const billSnap = await getDocs(query(collection(db, 'bills'), where('appointmentId', '==', appointmentId)));
+        for (const b of billSnap.docs) {
+          await updateDoc(doc(db, 'bills', b.id), { consultationId: ref.id, updatedAt: nowISO() });
+        }
       }
 
       // Create lab order documents if any
@@ -440,6 +482,25 @@ export function OPD() {
           date: form.date, createdAt: nowISO(),
         });
         await logAudit('create', 'labOrder', labRef.id, `${form.patientName} — ${labOrders.length} test(s)`);
+      }
+
+      if (prescriptionPayload.length > 0) {
+        const pharmRef = await addDoc(collection(db, 'pharmacyOrders'), {
+          consultationId: ref.id,
+          patientId: form.patientId,
+          patientName: form.patientName,
+          patientMRN: form.patientMRN,
+          patientAge: form.patientAge || '',
+          patientGender: form.patientGender || '',
+          doctorName: form.doctorName || '',
+          department: form.department || '',
+          diagnosis: form.diagnosis || '',
+          date: form.date,
+          prescriptions: prescriptionPayload,
+          status: 'pending',
+          createdAt: nowISO(),
+        });
+        await logAudit('create', 'pharmacyOrder', pharmRef.id, `${form.patientName} - ${prescriptionPayload.length} medicine(s)`);
       }
 
       setShowModal(false);
@@ -479,6 +540,36 @@ export function OPD() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search by patient name or MRN..." className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
+      </div>
+
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold text-gray-900 text-sm">Ready For Doctor</h2>
+            <p className="text-xs text-gray-400">{readyAppointments.length} patient{readyAppointments.length !== 1 ? 's' : ''} with vitals submitted</p>
+          </div>
+          <span className="text-xs bg-purple-50 text-purple-700 px-2.5 py-1 rounded-full font-medium">Vitals done only</span>
+        </div>
+        {readyAppointments.length === 0 ? (
+          <div className="px-5 py-8 text-center text-gray-400 text-sm">No patients are ready for consultation yet</div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {readyAppointments.map((a: any) => (
+              <div key={a.id} className="px-5 py-3 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-full bg-purple-600 text-white flex items-center justify-center text-sm font-bold shrink-0">{a.tokenNo || '-'}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-gray-900 truncate">{a.patientName}</div>
+                  <div className="text-xs text-gray-400">{a.patientMRN} · {a.patientAge || '-'}yrs · BP {a.vitals?.bp || '-'} · Temp {a.vitals?.temperature || '-'}</div>
+                </div>
+                <div className="hidden md:block text-sm text-gray-600">{a.doctorName || '-'}</div>
+                <button onClick={() => openAppointmentForConsultation(a)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700">
+                  Start OPD
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Batch Print Bar */}
@@ -1077,7 +1168,7 @@ export function OPD() {
                     </div>
                   );
                 })()}
-                <p className="text-xs text-green-600">✓ A bill will be auto-created and linked to this consultation.</p>
+                <p className="text-xs text-green-600">Consultation bill is created at reception and linked here after the doctor saves.</p>
               </div>
             {/* end prescription tab */}
             </>)}
@@ -1184,11 +1275,11 @@ export function OPD() {
                 ))}
               </div>
               {viewConsult.complaints && <div><span className="text-xs font-semibold text-gray-500 block mb-1">COMPLAINTS</span><p className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg">{viewConsult.complaints}</p></div>}
-              {(viewConsult.bp || viewConsult.temperature || viewConsult.weight || viewConsult.pulse || viewConsult.spo2) && (
+              {(viewConsult.vitals?.bp || viewConsult.vitals?.temperature || viewConsult.vitals?.weight || viewConsult.vitals?.pulse || viewConsult.vitals?.spo2 || viewConsult.bp || viewConsult.temperature || viewConsult.weight || viewConsult.pulse || viewConsult.spo2) && (
                 <div>
                   <span className="text-xs font-semibold text-gray-500 block mb-2">VITALS</span>
                   <div className="grid grid-cols-5 gap-2">
-                    {[['BP', viewConsult.bp, 'mmHg'], ['Temp', viewConsult.temperature, '°F'], ['Weight', viewConsult.weight, 'kg'], ['Pulse', viewConsult.pulse, 'bpm'], ['SpO2', viewConsult.spo2, '%']].map(([l, v, u]) => v ? (
+                    {[['BP', viewConsult.vitals?.bp || viewConsult.bp, 'mmHg'], ['Temp', viewConsult.vitals?.temperature || viewConsult.temperature, '°F'], ['Weight', viewConsult.vitals?.weight || viewConsult.weight, 'kg'], ['Pulse', viewConsult.vitals?.pulse || viewConsult.pulse, 'bpm'], ['SpO2', viewConsult.vitals?.spo2 || viewConsult.spo2, '%']].map(([l, v, u]) => v ? (
                       <div key={l as string} className="bg-blue-50 rounded-lg p-2 text-center">
                         <div className="text-xs text-blue-400">{l}</div>
                         <div className="text-sm font-bold text-blue-700">{v}</div>

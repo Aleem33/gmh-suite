@@ -14,7 +14,7 @@ import {
 } from '../lib/prescriptionPrintSettings';
 import { deleteAllAppData, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
 
-const ROLES = ['admin','receptionist','doctor','pharmacist','lab_technician','cashier'];
+const ROLES = ['admin','receptionist','doctor','nurse','pharmacist','lab_technician','cashier'];
 type PrintSectionKey = 'name' | 'age' | 'date' | 'clinical' | 'medicines' | 'vitals';
 
 const PRINT_SECTIONS: { key: PrintSectionKey; title: string; hint: string }[] = [

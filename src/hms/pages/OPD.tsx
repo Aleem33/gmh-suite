@@ -230,7 +230,7 @@ export function OPD() {
           prescriptions: rx, labOrders: c.labOrders || [],
           followUpDate: c.followUpDate ? formatDate(c.followUpDate) : undefined,
           notes: c.notes, vitals: c.vitals || {},
-        });
+        }, 'doctor-second-pass');
         if (i < toPrint.length - 1) {
           await new Promise(resolve => setTimeout(resolve, 1500));
         }
@@ -440,7 +440,7 @@ export function OPD() {
           pulse: consult.vitals?.pulse || consult.pulse || '',
           spo2: consult.vitals?.spo2 || consult.spo2 || '',
         },
-      });
+      }, 'doctor-second-pass');
     } finally {
       setTranslating(false);
     }
@@ -1257,7 +1257,7 @@ export function OPD() {
               <h2 className="font-semibold text-gray-900">Consultation Details</h2>
               <div className="flex items-center gap-2">
                 <button onClick={() => printConsultation(viewConsult)} className="flex items-center gap-1.5 text-gray-500 hover:text-gray-700 text-sm border border-gray-200 px-3 py-1.5 rounded-lg">
-                  <Printer className="w-4 h-4" /> Print PDF
+                  <Printer className="w-4 h-4" /> Print 2nd Pass
                 </button>
                 {viewConsult.prescriptions?.length > 0 && (
                   <button onClick={() => shareWhatsApp(viewConsult)}

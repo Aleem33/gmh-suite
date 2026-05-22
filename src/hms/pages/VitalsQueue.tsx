@@ -4,7 +4,7 @@ import { Activity, Clock, Printer, Save, Search, UserRound } from 'lucide-react'
 import { db, auth } from '../../firebase';
 import { formatDate, nowISO, today } from '../lib/utils';
 import { logAudit } from '../lib/audit';
-import { printVitalsSlip } from '../lib/pdf';
+import { printVitalsOnPrescriptionPad } from '../lib/pdf';
 
 const emptyVitals = { bp: '', temperature: '', weight: '', pulse: '', spo2: '', complaint: '', notes: '' };
 
@@ -80,7 +80,7 @@ export function VitalsQueue() {
       const updated = { ...selected, vitals, status: 'vitals_done' };
       setSelected(updated);
       setMessage('Vitals saved. Patient is ready for doctor.');
-      if (printAfter) printVitalsSlip({ ...updated, vitals });
+      if (printAfter) printVitalsOnPrescriptionPad({ ...updated, vitals, date: formatDate(updated.date) });
     } catch (e: any) {
       setMessage(e.message || 'Could not save vitals.');
     } finally {
@@ -189,7 +189,7 @@ export function VitalsQueue() {
                   <Save className="w-4 h-4" /> Save
                 </button>
                 <button onClick={() => saveVitals(true)} disabled={saving} className="flex items-center justify-center gap-2 bg-blue-600 text-white py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-60">
-                  <Printer className="w-4 h-4" /> Save & Print
+                  <Printer className="w-4 h-4" /> Save & Print Pad
                 </button>
               </div>
             </div>

@@ -50,8 +50,10 @@ export function OPD() {
     bp: '', temperature: '', weight: '', pulse: '', spo2: '',
   });
   const [prescriptions, setPrescriptions] = useState<any[]>([]);
+  const [pharmacySlipItems, setPharmacySlipItems] = useState<any[]>([]);
   const [labOrders, setLabOrders] = useState<any[]>([]);
   const [medSearch, setMedSearch] = useState('');
+  const [pharmacySlipSearch, setPharmacySlipSearch] = useState('');
   const [labSearch, setLabSearch] = useState('');
   const [translating, setTranslating] = useState(false);
   const [currentDoctorId, setCurrentDoctorId] = useState<string | null>(null);
@@ -121,10 +123,12 @@ export function OPD() {
           appointmentId: p.appointmentId || '',
         }));
         setPrescriptions([]);
+        setPharmacySlipItems([]);
         setLabOrders([]);
         setError('');
         setPatientSearch('');
         setMedSearch('');
+        setPharmacySlipSearch('');
         setLabSearch('');
         setShowModal(true);
       } catch(e) { console.error('Pre-fill error:', e); }
@@ -275,6 +279,7 @@ export function OPD() {
 
   const filteredPatients = patients.filter(p => !patientSearch || p.name?.toLowerCase().includes(patientSearch.toLowerCase()) || p.mrn?.includes(patientSearch)).slice(0, 5);
   const filteredMeds = medicines.filter(m => medSearch && m.name?.toLowerCase().includes(medSearch.toLowerCase()) && m.stock > 0).slice(0, 5);
+  const filteredPharmacySlipMeds = medicines.filter(m => pharmacySlipSearch && m.name?.toLowerCase().includes(pharmacySlipSearch.toLowerCase()) && m.stock > 0).slice(0, 5);
   const filteredLabTests = labTests.filter(t => labSearch && t.name?.toLowerCase().includes(labSearch.toLowerCase())).slice(0, 5);
 
   const preparePrescriptionRows = async (rows: any[]) => {
@@ -322,10 +327,12 @@ export function OPD() {
       spo2: appt.vitals?.spo2 || '',
     }));
     setPrescriptions([]);
+    setPharmacySlipItems([]);
     setLabOrders([]);
     setError('');
     setPatientSearch('');
     setMedSearch('');
+    setPharmacySlipSearch('');
     setLabSearch('');
     setModalTab('prescription');
     setPatientHistory(getPatientHistory(consultations, appt.patientId));
@@ -377,6 +384,24 @@ export function OPD() {
     setLabSearch('');
   };
 
+  const addPharmacySlipItem = (med: any) => {
+    if (pharmacySlipItems.find(p => p.medicineId === med.id)) return;
+    setPharmacySlipItems(p => [...p, {
+      medicineId: med.id,
+      name: med.name,
+      nameUrdu: med.nameUrdu || '',
+      dosage: '1 tablet',
+      dosageUrdu: getDosageUrdu('1 tablet'),
+      frequency: 'Twice daily',
+      frequencyUrdu: getFrequencyUrdu('Twice daily'),
+      duration: '7 days',
+      durationUrdu: getDurationUrdu('7 days'),
+      instructions: '',
+      instructionsUrdu: getInstructionUrdu(''),
+    }]);
+    setPharmacySlipSearch('');
+  };
+
   const reuseFromHistory = async (visit: any) => {
     if (!visit.prescriptions?.length) return;
     const toAdd = withPrescriptionListUrdu(visit.prescriptions.filter((p: any) => !prescriptions.find(rx => rx.medicineId === p.medicineId)));
@@ -389,10 +414,12 @@ export function OPD() {
   };
 
   const sendToPharmacy = async (c: any) => {
-    if (!c.prescriptions?.length) return;
+    const pharmacyPayload = c.pharmacySlipItems?.length ? c.pharmacySlipItems : c.prescriptions;
+    if (!pharmacyPayload?.length) return;
     try {
       await addDoc(collection(db, 'pharmacyOrders'), {
         consultationId: c.id,
+        source: c.pharmacySlipItems?.length ? 'opd_pharmacy_slip' : 'opd_prescription',
         patientId:     c.patientId,
         patientName:   c.patientName,
         patientMRN:    c.patientMRN,
@@ -402,7 +429,7 @@ export function OPD() {
         department:    c.department   || '',
         diagnosis:     c.diagnosis    || '',
         date:          c.date,
-        prescriptions: withPrescriptionListUrdu(c.prescriptions || []),
+        prescriptions: withPrescriptionListUrdu(pharmacyPayload || []),
         status:        'pending',
         createdAt:     nowISO(),
       });
@@ -411,6 +438,18 @@ export function OPD() {
 
   const updatePrescription = (idx: number, key: string, val: string) => {
     setPrescriptions(p => p.map((item, i) => {
+      if (i !== idx) return item;
+      const next = { ...item, [key]: val };
+      if (key === 'dosage') next.dosageUrdu = getDosageUrdu(val);
+      if (key === 'frequency') next.frequencyUrdu = getFrequencyUrdu(val);
+      if (key === 'duration') next.durationUrdu = getDurationUrdu(val);
+      if (key === 'instructions') next.instructionsUrdu = getInstructionUrdu(val);
+      return next;
+    }));
+  };
+
+  const updatePharmacySlipItem = (idx: number, key: string, val: string) => {
+    setPharmacySlipItems(p => p.map((item, i) => {
       if (i !== idx) return item;
       const next = { ...item, [key]: val };
       if (key === 'dosage') next.dosageUrdu = getDosageUrdu(val);
@@ -463,9 +502,10 @@ export function OPD() {
       const vitals = { bp, temperature, weight, pulse, spo2 };
       const fee = Number(form.fee) || 0;
       const prescriptionPayload = await preparePrescriptionRows(prescriptions);
+      const pharmacySlipPayload = await preparePrescriptionRows(pharmacySlipItems);
 
       // Save consultation
-      const data = { ...formRest, fee, prescriptions: prescriptionPayload, labOrders, vitals, appointmentId: appointmentId || '', createdAt: nowISO() };
+      const data = { ...formRest, fee, prescriptions: prescriptionPayload, pharmacySlipItems: pharmacySlipPayload, labOrders, vitals, appointmentId: appointmentId || '', createdAt: nowISO() };
       const ref = await addDoc(collection(db, 'consultations'), data);
       await logAudit('create', 'consultation', ref.id, `${form.patientName} — ${form.diagnosis || form.complaints.slice(0, 40)}`);
 
@@ -493,9 +533,11 @@ export function OPD() {
         await logAudit('create', 'labOrder', labRef.id, `${form.patientName} — ${labOrders.length} test(s)`);
       }
 
-      if (prescriptionPayload.length > 0) {
+      const pharmacyOrderPayload = pharmacySlipPayload.length > 0 ? pharmacySlipPayload : prescriptionPayload;
+      if (pharmacyOrderPayload.length > 0) {
         const pharmRef = await addDoc(collection(db, 'pharmacyOrders'), {
           consultationId: ref.id,
+          source: pharmacySlipPayload.length > 0 ? 'opd_pharmacy_slip' : 'opd_prescription',
           patientId: form.patientId,
           patientName: form.patientName,
           patientMRN: form.patientMRN,
@@ -505,15 +547,16 @@ export function OPD() {
           department: form.department || '',
           diagnosis: form.diagnosis || '',
           date: form.date,
-          prescriptions: prescriptionPayload,
+          prescriptions: pharmacyOrderPayload,
           status: 'pending',
           createdAt: nowISO(),
         });
-        await logAudit('create', 'pharmacyOrder', pharmRef.id, `${form.patientName} - ${prescriptionPayload.length} medicine(s)`);
+        await logAudit('create', 'pharmacyOrder', pharmRef.id, `${form.patientName} - ${pharmacyOrderPayload.length} medicine(s)`);
       }
 
       setShowModal(false);
       setPrescriptions([]);
+      setPharmacySlipItems([]);
       setLabOrders([]);
     } catch (e: any) { setError(e.message); }
     finally { setSaving(false); }
@@ -530,7 +573,7 @@ export function OPD() {
         </div>
         <button onClick={() => {
           setForm({ patientId: '', patientName: '', patientMRN: '', patientAge: '', patientGender: '', doctorId: '', doctorName: '', department: 'General Medicine', date: today(), complaints: '', diagnosis: '', notes: '', followUpDate: '', fee: '500', paidAmount: '0', paymentMethod: 'Cash', bp: '', temperature: '', weight: '', pulse: '', spo2: '', appointmentId: '' });
-          setPrescriptions([]); setLabOrders([]); setError(''); setPatientSearch(''); setMedSearch(''); setLabSearch('');
+          setPrescriptions([]); setPharmacySlipItems([]); setLabOrders([]); setError(''); setPatientSearch(''); setMedSearch(''); setPharmacySlipSearch(''); setLabSearch('');
           setModalTab('prescription'); setPatientHistory([]); setExpandedVisit(null); setHistoryError('');
           setShowModal(true);
         }}
@@ -641,7 +684,7 @@ export function OPD() {
                         <MessageCircle className="w-4 h-4" />
                       </button>
                     )}
-                    {c.prescriptions?.length > 0 && (
+                    {(c.prescriptions?.length > 0 || c.pharmacySlipItems?.length > 0) && (
                       pharmacySentIds.has(c.id) ? (
                         <span className="text-xs text-emerald-600 font-medium px-2 py-1 bg-emerald-50 rounded-lg">✓ Sent</span>
                       ) : (
@@ -1091,6 +1134,101 @@ export function OPD() {
                 )}
               </div>
 
+              {/* Pharmacy Slip */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Send className="w-4 h-4 text-emerald-600" />
+                  <label className="text-xs font-semibold text-gray-700">PHARMACY SLIP</label>
+                  <span className="text-xs text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">Not printed on prescription</span>
+                </div>
+                <p className="text-xs text-gray-500 mb-2">
+                  Use this for medicines to send directly to pharmacy without showing them on the printed patient prescription.
+                </p>
+                <div className="relative mb-2">
+                  <input
+                    value={pharmacySlipSearch}
+                    onChange={e => setPharmacySlipSearch(e.target.value)}
+                    placeholder="Search medicine for pharmacy slip..."
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  {pharmacySlipSearch && filteredPharmacySlipMeds.length > 0 && (
+                    <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-lg shadow-lg z-10 mt-1">
+                      {filteredPharmacySlipMeds.map(m => (
+                        <button key={m.id} onClick={() => addPharmacySlipItem(m)} className="w-full text-left px-3 py-2 hover:bg-emerald-50 text-sm border-b border-gray-50 last:border-0">
+                          {m.name} <span className="text-xs text-gray-400">- Stock: {m.stock}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {pharmacySlipItems.length > 0 && (
+                  <div className="border border-emerald-100 rounded-lg overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead className="bg-emerald-50">
+                        <tr>
+                          {['Medicine', 'Dosage', 'Frequency', 'Duration', 'Instructions', ''].map(h => (
+                            <th key={h} className="px-2 py-2 text-left font-medium text-emerald-700 whitespace-nowrap">{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-emerald-50">
+                        {pharmacySlipItems.map((p, i) => (
+                          <tr key={i} className="align-top">
+                            <td className="px-3 py-2 min-w-[130px]">
+                              <div className="font-medium text-gray-800">{p.name}</div>
+                              {p.nameUrdu && (
+                                <div className="mt-1 text-green-700 text-xs text-right" dir="rtl" style={{ fontFamily: 'Noto Nastaliq Urdu, serif' }}>{p.nameUrdu}</div>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 min-w-[90px]">
+                              <select
+                                value={p.dosage}
+                                onChange={e => updatePharmacySlipItem(i, 'dosage', e.target.value)}
+                                className="border border-gray-200 rounded px-2 py-1 w-full text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              >
+                                {DOSAGE_OPTIONS.map(option => <option key={option.en} value={option.en}>{option.en}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-2 py-2 min-w-[110px]">
+                              <select
+                                value={p.frequency}
+                                onChange={e => updatePharmacySlipItem(i, 'frequency', e.target.value)}
+                                className="border border-gray-200 rounded px-2 py-1 w-full text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              >
+                                {FREQUENCY_OPTIONS.map(option => <option key={option.en} value={option.en}>{option.en}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-2 py-2 min-w-[90px]">
+                              <select
+                                value={p.duration}
+                                onChange={e => updatePharmacySlipItem(i, 'duration', e.target.value)}
+                                className="border border-gray-200 rounded px-2 py-1 w-full text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              >
+                                {DURATION_OPTIONS.map(option => <option key={option.en} value={option.en}>{option.en}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-2 py-2 min-w-[120px]">
+                              <select
+                                value={p.instructions || ''}
+                                onChange={e => updatePharmacySlipItem(i, 'instructions', e.target.value)}
+                                className="border border-gray-200 rounded px-2 py-1 w-full text-xs focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                              >
+                                {INSTRUCTION_OPTIONS.map(option => <option key={option.en || 'none'} value={option.en}>{option.en || 'No instruction'}</option>)}
+                              </select>
+                            </td>
+                            <td className="px-2 py-2">
+                              <button onClick={() => setPharmacySlipItems(p => p.filter((_, ii) => ii !== i))} className="text-red-400 hover:text-red-600">
+                                <X className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
               {/* Lab Orders */}
               <div>
                 <div className="flex items-center gap-2 mb-2">
@@ -1310,6 +1448,17 @@ export function OPD() {
                   ))}
                 </div>
               )}
+              {viewConsult.pharmacySlipItems?.length > 0 && (
+                <div>
+                  <span className="text-xs font-semibold text-emerald-700 block mb-2">PHARMACY SLIP</span>
+                  {viewConsult.pharmacySlipItems.map((p: any, i: number) => (
+                    <div key={i} className="flex items-center justify-between py-2 border-b border-emerald-50 last:border-0 text-sm">
+                      <span className="font-medium text-gray-800">{p.name}</span>
+                      <span className="text-gray-500 text-xs">{p.dosage} Â· {p.frequency} Â· {p.duration}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
               {viewConsult.labOrders?.length > 0 && (
                 <div>
                   <span className="text-xs font-semibold text-gray-500 block mb-2">LAB ORDERS</span>
@@ -1324,7 +1473,7 @@ export function OPD() {
             </div>
             <div className="px-5 pb-5 flex gap-3">
               <button onClick={() => setViewConsult(null)} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50">Close</button>
-              {viewConsult.prescriptions?.length > 0 && (
+              {(viewConsult.prescriptions?.length > 0 || viewConsult.pharmacySlipItems?.length > 0) && (
                 pharmacySentIds.has(viewConsult.id) ? (
                   <span className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-sm font-medium border border-emerald-200">
                     ✓ Sent to Pharmacy

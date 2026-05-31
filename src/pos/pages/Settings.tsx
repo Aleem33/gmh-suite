@@ -94,8 +94,8 @@ export function Settings() {
       const totalDocs = await deleteAllAppData(setDeleteProgress);
       setDeleteProgress(`Done: deleted ${totalDocs} records across HMS and Pharmacy.`);
       setConfirmText('');
-    } catch (error) {
-      setDeleteProgress('Error deleting data. Check console.');
+    } catch (error: any) {
+      setDeleteProgress(`Error: ${error?.message || 'Could not delete data.'}`);
     } finally {
       setIsDeleting(false);
       setTimeout(() => setDeleteProgress(''), 3000);

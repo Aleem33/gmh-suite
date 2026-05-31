@@ -1,8 +1,9 @@
 import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
-import { db } from '../firebase';
+import { auth, db } from '../firebase';
 
 export const GLOBAL_DATA_COLLECTIONS = [
   'settings',
+  'plans',
   'counters',
   'schedules',
   'users',
@@ -18,10 +19,12 @@ export const GLOBAL_DATA_COLLECTIONS = [
   'labOrders',
   'labTests',
   'bills',
+  'payments',
   'staff',
   'medicines',
   'suppliers',
   'purchases',
+  'posPurchases',
   'purchaseReturns',
   'sales',
   'saleReturns',
@@ -29,6 +32,7 @@ export const GLOBAL_DATA_COLLECTIONS = [
   'customers',
   'customerPayments',
   'expenses',
+  'posExpenses',
   'pharmacyOrders',
   'auditLogs',
   'notifications',
@@ -58,6 +62,13 @@ async function commitInChunks<T>(
     docs.slice(i, i + 400).forEach(item => writeChunk(batch, item));
     await batch.commit();
   }
+}
+
+function getResetCollections() {
+  return [
+    ...GLOBAL_DATA_COLLECTIONS.filter(name => name !== 'users'),
+    'users',
+  ];
 }
 
 export async function exportAllAppData(onProgress?: ProgressFn): Promise<BackupFile> {
@@ -101,14 +112,22 @@ export async function restoreAllAppData(backup: BackupFile, onProgress?: Progres
 
 export async function deleteAllAppData(onProgress?: ProgressFn) {
   let totalDocs = 0;
-  for (const collectionName of GLOBAL_DATA_COLLECTIONS) {
-    onProgress?.(`Deleting ${collectionName}...`);
-    const snap = await getDocs(collection(db, collectionName));
-    const docs = snap.docs;
-    if (!docs.length) continue;
+  const currentUserId = auth.currentUser?.uid || '';
 
-    await commitInChunks(docs, (batch, document) => batch.delete(document.ref));
-    totalDocs += docs.length;
+  for (const collectionName of getResetCollections()) {
+    onProgress?.(`Deleting ${collectionName}...`);
+    try {
+      const snap = await getDocs(collection(db, collectionName));
+      const docs = collectionName === 'users' && currentUserId
+        ? snap.docs.filter(document => document.id !== currentUserId)
+        : snap.docs;
+      if (!docs.length) continue;
+
+      await commitInChunks(docs, (batch, document) => batch.delete(document.ref));
+      totalDocs += docs.length;
+    } catch (error: any) {
+      throw new Error(`Failed while deleting ${collectionName}: ${error?.message || 'Unknown error'}`);
+    }
   }
 
   return totalDocs;

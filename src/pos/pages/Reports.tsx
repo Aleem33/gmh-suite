@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
+import { printPageOrShare } from '../lib/nativeUtils';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
@@ -8,9 +9,13 @@ import {
   parseISO, isWithinInterval,
 } from 'date-fns';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { Calendar, X, TrendingUp, TrendingDown, DollarSign, ShoppingCart, AlertTriangle, Clock } from 'lucide-react';
+import { Calendar, X, TrendingUp, TrendingDown, DollarSign, ShoppingCart, AlertTriangle, Clock, Printer } from 'lucide-react';
 
 type PeriodFilter = 'daily' | 'weekly' | 'monthly' | 'custom' | 'all';
+
+function getItemCategory(item: any): string {
+  return item?.category || item?.form || 'Medicine';
+}
 
 export function Reports() {
   const [sales, setSales]         = useState<any[]>([]);
@@ -20,6 +25,7 @@ export function Reports() {
   const [period, setPeriod]     = useState<PeriodFilter>('all');
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo]     = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [showCustom, setShowCustom] = useState(false);
 
   useEffect(() => {
@@ -42,26 +48,38 @@ export function Reports() {
 
   const dateRange = getDateRange();
 
-  const filteredSales = dateRange
+  const categoryOptions = ['all', ...Array.from(new Set(sales.flatMap(s => (s.items || []).map((item: any) => getItemCategory(item))))).sort()];
+
+  const dateFilteredSales = dateRange
     ? sales.filter(s => { const d = s.date ? new Date(s.date) : null; return d ? isWithinInterval(d, dateRange) : false; })
     : sales;
+
+  const filteredSales = categoryFilter === 'all'
+    ? dateFilteredSales
+    : dateFilteredSales.filter(s => (s.items || []).some((item: any) => getItemCategory(item) === categoryFilter));
+
+  const filteredItems = filteredSales.flatMap(sale =>
+    (sale.items || [])
+      .filter((item: any) => categoryFilter === 'all' || getItemCategory(item) === categoryFilter)
+      .map((item: any) => ({ sale, item }))
+  );
 
   const filteredExpenses = dateRange
     ? expenses.filter(e => { const d = e.date ? new Date(e.date) : null; return d ? isWithinInterval(d, dateRange) : false; })
     : expenses;
 
-  const totalRevenue  = filteredSales.reduce((sum, s) => sum + (s.total || 0), 0);
+  const totalRevenue  = categoryFilter === 'all'
+    ? filteredSales.reduce((sum, s) => sum + (s.total || 0), 0)
+    : filteredItems.reduce((sum, row) => sum + (row.item.total || 0), 0);
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
   let totalCost = 0;
-  filteredSales.forEach(sale => {
-    sale.items?.forEach((item: any) => {
+  filteredItems.forEach(({ item }) => {
       const costPrice  = item.costPrice   || 0;
       const unitsPerBox = item.unitsPerBox || 1;
       const costPerUnit = costPrice / unitsPerBox;
       const unitsSold   = item.quantity * (item.sellType === 'box' ? unitsPerBox : 1);
       totalCost += costPerUnit * unitsSold;
-    });
   });
 
   const totalProfit = totalRevenue - totalCost - totalExpenses;
@@ -92,12 +110,59 @@ export function Reports() {
     else setShowCustom(true);
   };
 
+  const handlePrintReport = () => {
+    printPageOrShare('POS Report');
+  };
+
   return (
-    <div className="space-y-4 md:space-y-6">
+    <>
+      <div className="hidden print:block bg-white text-black p-6">
+        <div className="text-center mb-5">
+          <h1 className="text-xl font-bold">GMH Suite Pharmacy</h1>
+          <p className="text-sm">Sales Report</p>
+          <p className="text-xs">Category: {categoryFilter === 'all' ? 'All Categories' : categoryFilter} | {periodLabels[period]}</p>
+        </div>
+        <table className="w-full text-xs border-collapse">
+          <thead>
+            <tr className="border-b border-black">
+              <th className="text-left py-1">Date</th>
+              <th className="text-left py-1">Category</th>
+              <th className="text-left py-1">Item</th>
+              <th className="text-right py-1">Qty</th>
+              <th className="text-right py-1">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredItems.map(({ sale, item }, idx) => (
+              <tr key={`${sale.id}-${idx}`} className="border-b border-gray-200">
+                <td className="py-1">{sale.date ? format(new Date(sale.date), 'dd/MM/yyyy') : 'N/A'}</td>
+                <td className="py-1">{getItemCategory(item)}</td>
+                <td className="py-1">{item.name}</td>
+                <td className="py-1 text-right">{item.quantity || 0}</td>
+                <td className="py-1 text-right">{formatCurrency(item.total || 0)}</td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-black font-bold">
+              <td className="py-2" colSpan={3}>Total</td>
+              <td className="py-2 text-right">{filteredItems.reduce((s, row) => s + (row.item.quantity || 0), 0)}</td>
+              <td className="py-2 text-right">{formatCurrency(totalRevenue)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
 
       {/* Header + period selector */}
+      <div className="space-y-4 md:space-y-6 print:hidden">
       <div className="space-y-3">
-        <h1 className="text-xl md:text-2xl font-bold text-gray-900">Reports & Analytics</h1>
+        <div className="flex items-center justify-between gap-3">
+          <h1 className="text-xl md:text-2xl font-bold text-gray-900">Reports & Analytics</h1>
+          <button onClick={handlePrintReport}
+            className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+            <Printer className="w-4 h-4" /> Print
+          </button>
+        </div>
 
         {/* Period pills — scrollable on mobile */}
         <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-hide">
@@ -141,6 +206,13 @@ export function Reports() {
               : ''}
           </span>
           <span>{filteredSales.length} transactions</span>
+        </div>
+        <div className="max-w-xs">
+          <label className="block text-xs text-gray-500 mb-1">Print / report category</label>
+          <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+            {categoryOptions.map(c => <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>)}
+          </select>
         </div>
       </div>
 
@@ -279,6 +351,7 @@ export function Reports() {
           </div>
         </div>
       </div>
-    </div>
+      </div>
+    </>
   );
 }

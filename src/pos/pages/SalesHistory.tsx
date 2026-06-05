@@ -14,7 +14,7 @@ type ExportType = 'all' | 'customer' | 'hospital';
 type ViewMode   = 'summary' | 'excel';
 type SortDir    = 'asc' | 'desc' | null;
 type SummaryCol = 'date' | 'type' | 'items' | 'subtotal' | 'discount' | 'total';
-type ExcelCol   = 'date' | 'type' | 'itemName' | 'sellType' | 'quantity' | 'unitPrice' | 'itemTotal' | 'subtotal' | 'discount' | 'saleTotal';
+type ExcelCol   = 'date' | 'type' | 'itemName' | 'category' | 'sellType' | 'quantity' | 'unitPrice' | 'itemTotal' | 'subtotal' | 'discount' | 'saleTotal';
 interface SortState<T extends string> { col: T | null; dir: SortDir }
 
 function SortIcon({ col, sort }: { col: string; sort: SortState<any> }) {
@@ -33,6 +33,14 @@ function getGross(sale: any): number {
   return (sale.subtotal || 0) + (sale.totalItemDiscounts || 0);
 }
 
+function getItemCategory(item: any): string {
+  return item?.category || item?.form || 'Medicine';
+}
+
+function saleHasCategory(sale: any, category: string) {
+  return category === 'all' || (sale.items || []).some((item: any) => getItemCategory(item) === category);
+}
+
 export function SalesHistory() {
   const [sales, setSales]               = useState<any[]>([]);
   const [search, setSearch]             = useState('');
@@ -44,6 +52,7 @@ export function SalesHistory() {
   const [showFilters, setShowFilters]   = useState(false);
 
   const [typeFilter, setTypeFilter] = useState<'all' | 'customer' | 'hospital'>('all');
+  const [categoryFilter, setCategoryFilter] = useState('all');
   const [dateFrom, setDateFrom]     = useState('');
   const [dateTo, setDateTo]         = useState('');
 
@@ -52,6 +61,7 @@ export function SalesHistory() {
 
   const [showExportModal, setShowExportModal] = useState(false);
   const [exportType,      setExportType]      = useState<ExportType>('all');
+  const [exportCategory,  setExportCategory]  = useState('all');
   const [exportDateFrom,  setExportDateFrom]  = useState('');
   const [exportDateTo,    setExportDateTo]    = useState('');
 
@@ -63,7 +73,13 @@ export function SalesHistory() {
     return () => unsub();
   }, []);
 
-  const applyFilters = (list: any[], tf: typeof typeFilter, df: string, dt: string, q: string) =>
+  const categoryOptions = useMemo(() => {
+    const names = new Set<string>();
+    sales.forEach(sale => (sale.items || []).forEach((item: any) => names.add(getItemCategory(item))));
+    return ['all', ...Array.from(names).sort()];
+  }, [sales]);
+
+  const applyFilters = (list: any[], tf: typeof typeFilter, cf: string, df: string, dt: string, q: string) =>
     list.filter(s => {
       const matchSearch =
         s.id.toLowerCase().includes(q.toLowerCase()) ||
@@ -72,6 +88,7 @@ export function SalesHistory() {
         (s.items?.some((it: any) => it.name?.toLowerCase().includes(q.toLowerCase())));
       const matchType =
         tf === 'all' || (tf === 'hospital' ? s.customerType === 'hospital' : s.customerType !== 'hospital');
+      const matchCategory = saleHasCategory(s, cf);
       let matchDate = true;
       if (df || dt) {
         const d = s.date ? new Date(s.date) : null;
@@ -81,12 +98,12 @@ export function SalesHistory() {
           else if (dt)  matchDate = d <= endOfDay(parseISO(dt));
         } else matchDate = false;
       }
-      return matchSearch && matchType && matchDate;
+      return matchSearch && matchType && matchCategory && matchDate;
     });
 
   const filteredSales = useMemo(
-    () => applyFilters(sales, typeFilter, dateFrom, dateTo, search),
-    [sales, typeFilter, dateFrom, dateTo, search]
+    () => applyFilters(sales, typeFilter, categoryFilter, dateFrom, dateTo, search),
+    [sales, typeFilter, categoryFilter, dateFrom, dateTo, search]
   );
 
   const sortedSummary = useMemo(() => {
@@ -111,11 +128,13 @@ export function SalesHistory() {
   const flatRows = useMemo(() => {
     const rows: any[] = [];
     filteredSales.forEach(sale => {
-      if (sale.items?.length) sale.items.forEach((item: any) => { rows.push({ sale, item }); });
+      if (sale.items?.length) sale.items
+        .filter((item: any) => categoryFilter === 'all' || getItemCategory(item) === categoryFilter)
+        .forEach((item: any) => { rows.push({ sale, item }); });
       else rows.push({ sale, item: null });
     });
     return rows;
-  }, [filteredSales]);
+  }, [filteredSales, categoryFilter]);
 
   const sortedExcel = useMemo(() => {
     const arr = [...flatRows];
@@ -126,6 +145,7 @@ export function SalesHistory() {
       if (col === 'date')      { av = new Date(a.date || 0).getTime(); bv = new Date(b.date || 0).getTime(); }
       if (col === 'type')      { av = a.customerType || 'customer';    bv = b.customerType || 'customer'; }
       if (col === 'itemName')  { av = ai?.name  || '';                 bv = bi?.name  || ''; }
+      if (col === 'category')  { av = getItemCategory(ai);              bv = getItemCategory(bi); }
       if (col === 'sellType')  { av = ai?.sellType || '';              bv = bi?.sellType || ''; }
       if (col === 'quantity')  { av = ai?.quantity || 0;               bv = bi?.quantity || 0; }
       if (col === 'unitPrice') { av = ai?.price || 0;                  bv = bi?.price || 0; }
@@ -198,10 +218,15 @@ export function SalesHistory() {
     else printPageOrShare('Sales History');
   };
 
+  const printHistoryReport = () => {
+    setSelectedSale(null);
+    setTimeout(() => printPageOrShare('Sales History'), 50);
+  };
+
   const doExport = () => {
-    const exportSales = applyFilters(sales, exportType, exportDateFrom, exportDateTo, '');
+    const exportSales = applyFilters(sales, exportType, exportCategory, exportDateFrom, exportDateTo, '');
     const rows: string[][] = [
-      ['Date & Time','Sale ID','Sale Type','Customer','Item Name','Sell Type','Quantity','Unit Price','Item Total','Gross Subtotal','Sale Discount','Sale Total','Amount Paid','Pending Amount'],
+      ['Date & Time','Sale ID','Sale Type','Customer','Category','Item Name','Sell Type','Quantity','Unit Price','Item Total','Gross Subtotal','Sale Discount','Sale Total','Amount Paid','Pending Amount'],
     ];
     exportSales.forEach(sale => {
       const dateStr  = sale.date ? format(new Date(sale.date), 'dd/MM/yyyy HH:mm') : 'N/A';
@@ -211,9 +236,10 @@ export function SalesHistory() {
       const paid  = sale.amountPaid ?? sale.total ?? 0;
       const pend  = sale.pendingAmount || 0;
       if (sale.items?.length) {
-        sale.items.forEach((item: any, idx: number) => {
+        sale.items.filter((item: any) => exportCategory === 'all' || getItemCategory(item) === exportCategory).forEach((item: any, idx: number) => {
           rows.push([
             dateStr, sale.id, saleType, custName,
+            getItemCategory(item),
             item.name || '', item.sellType || '',
             String(item.quantity || 0), String(item.price || 0), String(item.total || 0),
             idx === 0 ? String(gross)              : '',
@@ -224,7 +250,7 @@ export function SalesHistory() {
           ]);
         });
       } else {
-        rows.push([dateStr, sale.id, saleType, custName, '(no items)', '', '', '', '',
+        rows.push([dateStr, sale.id, saleType, custName, '', '(no items)', '', '', '', '',
           String(gross), String(sale.discount || 0), String(sale.total || 0), String(paid), String(pend)]);
       }
     });
@@ -237,17 +263,18 @@ export function SalesHistory() {
     rows.push(['TOTAL', `${exportSales.length} sales`, '', '', '', '', String(gQty), '', '', String(gSub), String(gDis), String(gTot), '', String(gPen)]);
     const csv  = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const typeLabel  = exportType === 'all' ? 'all' : exportType === 'hospital' ? 'hospitals' : 'customers';
+    const categoryLabel = exportCategory === 'all' ? 'all_categories' : exportCategory.toLowerCase().replace(/\s+/g, '_');
     const rangeLabel = exportDateFrom && exportDateTo ? `${exportDateFrom}_to_${exportDateTo}` : exportDateFrom ? `from_${exportDateFrom}` : exportDateTo ? `to_${exportDateTo}` : 'all_dates';
-    downloadOrShare('\uFEFF' + csv, `sales_${typeLabel}_${rangeLabel}.csv`, 'text/csv;charset=utf-8;');
+    downloadOrShare('\uFEFF' + csv, `sales_${typeLabel}_${categoryLabel}_${rangeLabel}.csv`, 'text/csv;charset=utf-8;');
     setShowExportModal(false);
   };
 
-  const clearFilters = () => { setTypeFilter('all'); setDateFrom(''); setDateTo(''); setSearch(''); };
-  const hasActiveFilters = typeFilter !== 'all' || dateFrom !== '' || dateTo !== '' || search !== '';
+  const clearFilters = () => { setTypeFilter('all'); setCategoryFilter('all'); setDateFrom(''); setDateTo(''); setSearch(''); };
+  const hasActiveFilters = typeFilter !== 'all' || categoryFilter !== 'all' || dateFrom !== '' || dateTo !== '' || search !== '';
 
   const exportPreviewCount = useMemo(
-    () => applyFilters(sales, exportType, exportDateFrom, exportDateTo, '').length,
-    [sales, exportType, exportDateFrom, exportDateTo]
+    () => applyFilters(sales, exportType, exportCategory, exportDateFrom, exportDateTo, '').length,
+    [sales, exportType, exportCategory, exportDateFrom, exportDateTo]
   );
 
   return (
@@ -295,6 +322,48 @@ export function SalesHistory() {
         </div>
       )}
 
+      {!selectedSale && (
+        <div className="hidden print:block bg-white text-black p-6">
+          <div className="text-center mb-5">
+            <h1 className="text-xl font-bold">GMH Suite Pharmacy</h1>
+            <p className="text-sm">Sales History Report</p>
+            <p className="text-xs">
+              Category: {categoryFilter === 'all' ? 'All Categories' : categoryFilter}
+              {dateFrom || dateTo ? ` | ${dateFrom || 'Start'} to ${dateTo || 'Today'}` : ''}
+            </p>
+          </div>
+          <table className="w-full text-xs border-collapse">
+            <thead>
+              <tr className="border-b border-black">
+                <th className="text-left py-1">Date</th>
+                <th className="text-left py-1">Category</th>
+                <th className="text-left py-1">Item</th>
+                <th className="text-right py-1">Qty</th>
+                <th className="text-right py-1">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedExcel.map(({ sale, item }, idx) => item ? (
+                <tr key={`${sale.id}-print-${idx}`} className="border-b border-gray-200">
+                  <td className="py-1">{sale.date ? format(new Date(sale.date), 'dd/MM/yyyy') : 'N/A'}</td>
+                  <td className="py-1">{getItemCategory(item)}</td>
+                  <td className="py-1">{item.name}</td>
+                  <td className="py-1 text-right">{item.quantity || 0}</td>
+                  <td className="py-1 text-right">{formatCurrency(item.total || 0)}</td>
+                </tr>
+              ) : null)}
+            </tbody>
+            <tfoot>
+              <tr className="border-t border-black font-bold">
+                <td className="py-2" colSpan={3}>Total</td>
+                <td className="py-2 text-right">{sortedExcel.reduce((s, { item }) => s + (item?.quantity || 0), 0)}</td>
+                <td className="py-2 text-right">{formatCurrency(sortedExcel.reduce((s, { item }) => s + (item?.total || 0), 0))}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
       <div className="space-y-4 md:space-y-6 print:hidden">
 
         {/* Header */}
@@ -315,6 +384,10 @@ export function SalesHistory() {
             <button onClick={() => setShowExportModal(true)}
               className="flex items-center gap-2 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-medium">
               <Download className="w-4 h-4" /> <span className="hidden sm:inline">Export</span>
+            </button>
+            <button onClick={printHistoryReport}
+              className="flex items-center gap-2 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium">
+              <Printer className="w-4 h-4" /> <span className="hidden sm:inline">Print</span>
             </button>
           </div>
         </div>
@@ -378,6 +451,13 @@ export function SalesHistory() {
                       {t === 'all' ? 'All' : t === 'customer' ? 'Customers' : 'Hospitals'}
                     </button>
                   ))}
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Category</label>
+                  <select value={categoryFilter} onChange={e => setCategoryFilter(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {categoryOptions.map(c => <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>)}
+                  </select>
                 </div>
                 {/* Date range */}
                 <div className="grid grid-cols-2 gap-2">
@@ -694,6 +774,13 @@ export function SalesHistory() {
                       <X className="w-3 h-3" /> Clear dates
                     </button>
                   )}
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Category</label>
+                  <select value={exportCategory} onChange={e => setExportCategory(e.target.value)}
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    {categoryOptions.map(c => <option key={c} value={c}>{c === 'all' ? 'All Categories' : c}</option>)}
+                  </select>
                 </div>
                 <div className="bg-blue-50 rounded-lg px-4 py-3 text-sm text-blue-700">
                   Will export <span className="font-bold">{exportPreviewCount}</span> sales with all items

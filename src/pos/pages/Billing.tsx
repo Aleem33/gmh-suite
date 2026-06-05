@@ -143,6 +143,7 @@ export function Billing() {
       }
       return [...prev, {
         cartItemId, medicineId: med.id, name: med.name, sellType, price,
+        category: med.category || 'Medicine',
         costPrice: med.costPrice || 0, quantity: 1,
         discountType: 'rs' as 'rs' | 'pct', discountValue: 0, itemDiscount: 0,
         total: price, unitsPerBox: med.unitsPerBox || 1,
@@ -213,6 +214,7 @@ export function Billing() {
         cartItemId,
         medicineId: med.id,
         name: med.name,
+        category: med.category || 'Medicine',
         sellType: 'unit',
         price,
         costPrice: med.costPrice || 0,

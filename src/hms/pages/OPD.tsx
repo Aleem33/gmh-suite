@@ -414,12 +414,15 @@ export function OPD() {
   };
 
   const sendToPharmacy = async (c: any) => {
-    const pharmacyPayload = c.pharmacySlipItems?.length ? c.pharmacySlipItems : c.prescriptions;
+    const pharmacyPayload = [
+      ...(c.prescriptions || []),
+      ...(c.pharmacySlipItems || []),
+    ];
     if (!pharmacyPayload?.length) return;
     try {
       await addDoc(collection(db, 'pharmacyOrders'), {
         consultationId: c.id,
-        source: c.pharmacySlipItems?.length ? 'opd_pharmacy_slip' : 'opd_prescription',
+        source: c.pharmacySlipItems?.length ? 'opd_combined' : 'opd_prescription',
         patientId:     c.patientId,
         patientName:   c.patientName,
         patientMRN:    c.patientMRN,
@@ -533,11 +536,11 @@ export function OPD() {
         await logAudit('create', 'labOrder', labRef.id, `${form.patientName} — ${labOrders.length} test(s)`);
       }
 
-      const pharmacyOrderPayload = pharmacySlipPayload.length > 0 ? pharmacySlipPayload : prescriptionPayload;
+      const pharmacyOrderPayload = [...prescriptionPayload, ...pharmacySlipPayload];
       if (pharmacyOrderPayload.length > 0) {
         const pharmRef = await addDoc(collection(db, 'pharmacyOrders'), {
           consultationId: ref.id,
-          source: pharmacySlipPayload.length > 0 ? 'opd_pharmacy_slip' : 'opd_prescription',
+          source: pharmacySlipPayload.length > 0 ? 'opd_combined' : 'opd_prescription',
           patientId: form.patientId,
           patientName: form.patientName,
           patientMRN: form.patientMRN,

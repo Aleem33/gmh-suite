@@ -7,6 +7,8 @@ import { Plus, Edit2, Trash2, Search, AlertCircle, Upload, Download, X } from 'l
 import { format, isBefore, addDays } from 'date-fns';
 import Papa from 'papaparse';
 
+const ITEM_CATEGORIES = ['Medicine', 'Cold Drinks', 'Snacks', 'Grocery', 'Personal Care', 'Other'];
+
 export function Medicines() {
   const [medicines, setMedicines]       = useState<any[]>([]);
   const [search, setSearch]             = useState('');
@@ -19,7 +21,7 @@ export function Medicines() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
-    name: '', form: 'Tablet', unitsPerBox: '10',
+    name: '', category: 'Medicine', form: 'Tablet', unitsPerBox: '10',
     costPrice: '', retailPrice: '', unitPrice: '',
     stockBoxes: '0', stockLoose: '0',
     expiryDate: '', batchNo: '',
@@ -34,6 +36,8 @@ export function Medicines() {
 
   const filteredMedicines = medicines.filter(m =>
     m.name.toLowerCase().includes(search.toLowerCase()) ||
+    (m.category || '').toLowerCase().includes(search.toLowerCase()) ||
+    (m.form || '').toLowerCase().includes(search.toLowerCase()) ||
     (m.batchNo || '').toLowerCase().includes(search.toLowerCase())
   );
 
@@ -52,7 +56,7 @@ export function Medicines() {
     try {
       const totalStock = (parseInt(formData.stockBoxes || '0') * parseInt(formData.unitsPerBox || '1')) + parseInt(formData.stockLoose || '0');
       const data = {
-        name: formData.name, form: formData.form,
+        name: formData.name, category: formData.category, form: formData.form,
         unitsPerBox: parseInt(formData.unitsPerBox || '1'),
         costPrice:   parseFloat(formData.costPrice   || '0'),
         retailPrice: parseFloat(formData.retailPrice || '0'),
@@ -73,7 +77,7 @@ export function Medicines() {
   const handleEdit = (med: any) => {
     const unitsPerBox = med.unitsPerBox || 1;
     setFormData({
-      name: med.name, form: med.form || 'Tablet',
+      name: med.name, category: med.category || 'Medicine', form: med.form || 'Tablet',
       unitsPerBox: unitsPerBox.toString(),
       costPrice:   (med.costPrice   || 0).toString(),
       retailPrice: (med.retailPrice || med.price || 0).toString(),
@@ -98,7 +102,7 @@ export function Medicines() {
   };
 
   const handleDownloadTemplate = () => {
-    const headers = ['name','form','unitsPerBox','costPrice','retailPrice','unitPrice','stockBoxes','stockLoose','expiryDate','batchNo'];
+    const headers = ['name','category','form','unitsPerBox','costPrice','retailPrice','unitPrice','stockBoxes','stockLoose','expiryDate','batchNo'];
     const csv = headers.join(',');
     downloadOrShare(csv, 'medicines_template.csv', 'text/csv;charset=utf-8;');
   };;
@@ -121,7 +125,7 @@ export function Medicines() {
             const retailPrice = parseFloat(row.retailPrice || row.salePrice || '0');
             const unitPrice = parseFloat(row.unitPrice || (unitsPerBox > 0 ? (retailPrice / unitsPerBox).toFixed(2) : '0'));
             await addDoc(collection(db, 'medicines'), {
-              name: row.name, form: row.form || 'Tablet', unitsPerBox,
+              name: row.name, category: row.category || 'Medicine', form: row.form || 'Tablet', unitsPerBox,
               costPrice:   parseFloat(row.costPrice   || '0'),
               retailPrice,
               unitPrice,
@@ -190,7 +194,7 @@ export function Medicines() {
           <button
             onClick={() => {
               setEditingId(null);
-              setFormData({ name: '', form: 'Tablet', unitsPerBox: '10', costPrice: '', retailPrice: '', unitPrice: '', stockBoxes: '0', stockLoose: '0', expiryDate: '', batchNo: '' });
+              setFormData({ name: '', category: 'Medicine', form: 'Tablet', unitsPerBox: '10', costPrice: '', retailPrice: '', unitPrice: '', stockBoxes: '0', stockLoose: '0', expiryDate: '', batchNo: '' });
               setIsModalOpen(true);
             }}
             className="bg-blue-600 text-white px-3 py-2 rounded-lg flex items-center gap-1.5 hover:bg-blue-700 text-sm font-medium">
@@ -263,7 +267,7 @@ export function Medicines() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-gray-50 text-gray-500 text-sm border-b border-gray-100">
-                <th className="p-4 font-medium">Name & Form</th>
+                <th className="p-4 font-medium">Name & Category</th>
                 <th className="p-4 font-medium">Batch No</th>
                 <th className="p-4 font-medium">Stock</th>
                 <th className="p-4 font-medium">Retail Price</th>
@@ -276,7 +280,7 @@ export function Medicines() {
                 <tr key={med.id} className="hover:bg-gray-50">
                   <td className="p-4">
                     <p className="font-medium text-gray-900">{med.name}</p>
-                    <p className="text-xs text-gray-500">{med.form} {med.unitsPerBox > 1 ? `(${med.unitsPerBox}/box)` : ''}</p>
+                    <p className="text-xs text-gray-500">{med.category || 'Medicine'} - {med.form} {med.unitsPerBox > 1 ? `(${med.unitsPerBox}/box)` : ''}</p>
                   </td>
                   <td className="p-4 text-gray-600">{med.batchNo}</td>
                   <td className="p-4">
@@ -326,6 +330,13 @@ export function Medicines() {
                   <input required type="text" value={formData.name}
                     onChange={e => setFormData({ ...formData, name: e.target.value })}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
+                  <select value={formData.category} onChange={e => setFormData({ ...formData, category: e.target.value })}
+                    className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500">
+                    {ITEM_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Form</label>

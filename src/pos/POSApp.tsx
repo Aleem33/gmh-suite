@@ -21,13 +21,12 @@ import { hasAnyPermission, roleOrPermission, type UserProfile } from '../lib/per
 interface Props {
   userRole: string | null;
   userProfile?: UserProfile | null;
-  onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLoginSuccess: () => void;
   onBack?: () => void;
   onLogout?: () => void;
 }
 
-export function POSApp({ userRole, userProfile, onSwitchApp, onLoginSuccess, onBack, onLogout }: Props) {
+export function POSApp({ userRole, userProfile, onLoginSuccess, onBack, onLogout }: Props) {
   if (!userRole) return <Login onLoginSuccess={onLoginSuccess} onBack={onBack} />;
 
   const r = userRole;
@@ -57,7 +56,7 @@ export function POSApp({ userRole, userProfile, onSwitchApp, onLoginSuccess, onB
     <ErrorBoundary>
       <HashRouter>
         <Routes>
-          <Route path="/" element={<Layout role={r} userProfile={userProfile} onSwitchApp={onSwitchApp} onLogout={onLogout} />}>
+          <Route path="/" element={<Layout role={r} userProfile={userProfile} onLogout={onLogout} />}>
             {canDashboard && <Route index element={<Dashboard />} />}
             {canBilling && <Route path="billing"          element={<Billing userProfile={userProfile} />} />}
             {canMedicines && <Route path="medicines"        element={<Medicines userProfile={userProfile} />} />}

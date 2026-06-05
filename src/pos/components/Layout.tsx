@@ -4,11 +4,11 @@ import { Outlet, NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, ShoppingCart, Pill, Users, Truck,
   BarChart3, Settings, LogOut, UserCog, History, Receipt,
-  PackagePlus, RotateCcw, Menu, X, ClipboardList, ArrowLeftRight,
+  PackagePlus, RotateCcw, Menu, X, ClipboardList,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
-import { canAccessApp, roleOrPermission, type UserProfile } from '../../lib/permissions';
+import { roleOrPermission, type UserProfile } from '../../lib/permissions';
 
 const allNavItems = [
   { to: '/',                 icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin', 'pharmacist'] },
@@ -30,14 +30,12 @@ const allNavItems = [
 interface Props {
   role: string;
   userProfile?: UserProfile | null;
-  onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLogout?: () => void;
 }
 
-export function Layout({ role, userProfile, onSwitchApp, onLogout }: Props) {
+export function Layout({ role, userProfile, onLogout }: Props) {
   const navItems = allNavItems.filter(item => roleOrPermission(role, item.roles, userProfile, (item as any).permissions || (item as any).permission || []));
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const canSwitchToHospital = canAccessApp(userProfile || { role }, 'hms');
   const handleLogout = onLogout || logout;
 
   const NavItems = ({ onNavigate }: { onNavigate?: () => void }) => (
@@ -66,18 +64,6 @@ export function Layout({ role, userProfile, onSwitchApp, onLogout }: Props) {
 
   const FooterActions = ({ onNavigate }: { onNavigate?: () => void }) => (
     <div className="space-y-1">
-      {canSwitchToHospital && (
-        <button
-          onClick={() => {
-            onNavigate?.();
-            onSwitchApp('hms');
-          }}
-          className="flex items-center gap-3 px-3 py-2 w-full rounded-md text-sm font-medium text-blue-600 hover:bg-blue-50 transition-colors"
-        >
-          <ArrowLeftRight className="w-5 h-5" />
-          Switch to Hospital
-        </button>
-      )}
       <button
         onClick={handleLogout}
         className="flex items-center gap-3 px-3 py-2 w-full rounded-md text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
@@ -156,7 +142,7 @@ export function Layout({ role, userProfile, onSwitchApp, onLogout }: Props) {
             <Menu className="w-6 h-6" />
           </button>
           <img src={logoUrl} alt="" className="w-7 h-7 object-contain rounded-full border border-white/50 bg-white" />
-          <span className="font-semibold text-base">GMH Suite Pharmacy POS</span>
+          <span className="font-semibold text-base">GMH Suite Pharmacy</span>
         </header>
 
         <main className="flex-1 overflow-auto p-4 md:p-6 print:p-0 print:overflow-visible">

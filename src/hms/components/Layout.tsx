@@ -1,13 +1,13 @@
 import logoUrl from '../../assets/logo';
-import { useState, useEffect, useCallback } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Users, CalendarDays, Stethoscope, BedDouble,
   FlaskConical, Pill, Receipt, UserCog, BarChart3,
   Settings as SettingsIcon, LogOut, Truck,
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
-  Shield, CalendarCheck, Hotel, ArrowLeftRight, Monitor, BookOpen, Activity,
-  X,
+  Shield, CalendarCheck, Hotel, Monitor, BookOpen, Activity,
+  X, ShoppingCart, PackagePlus, RotateCcw, History,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
@@ -33,7 +33,6 @@ const NAV = [
     group: 'Services',
     items: [
       { to: '/lab',       icon: FlaskConical, label: 'Laboratory', roles: ['admin','doctor','lab_technician'] },
-      { to: '/pharmacy',  icon: Pill,         label: 'Pharmacy',   roles: ['admin','pharmacist'] },
       { to: '/suppliers', icon: Truck,        label: 'Suppliers',  roles: ['admin','pharmacist'] },
       { to: '/billing',   icon: Receipt,      label: 'Billing',    roles: ['admin','cashier'], permission: 'hms.billing.create' },
     ],
@@ -52,18 +51,46 @@ const NAV = [
   },
 ];
 
+const PHARMACY_NAV = [
+  { to: '/pharmacy/orders',           icon: Pill,         label: 'Orders / Dispense', roles: ['admin','pharmacist'] },
+  { to: '/pharmacy/billing',          icon: ShoppingCart, label: 'Billing',           roles: ['admin','cashier'], permission: 'pos.billing.create' },
+  { to: '/pharmacy/patient-history',  icon: ClipboardList,label: 'Patient Rx',        roles: ['admin','pharmacist','cashier'] },
+  { to: '/pharmacy/medicines',        icon: Pill,         label: 'Medicines',         roles: ['admin','pharmacist'], permission: 'pos.medicines.view' },
+  { to: '/pharmacy/purchases',        icon: PackagePlus,  label: 'Purchases',         roles: ['admin','pharmacist'], permissions: ['pos.purchases.view', 'pos.purchases.create'] },
+  { to: '/pharmacy/purchase-returns', icon: RotateCcw,    label: 'Purchase Returns',  roles: ['admin','pharmacist'], permission: 'pos.purchaseReturns.view' },
+  { to: '/pharmacy/sales',            icon: History,      label: 'Sales History',     roles: ['admin','cashier','pharmacist'], permission: 'pos.sales.view' },
+  { to: '/pharmacy/sale-returns',     icon: RotateCcw,    label: 'Sale Returns',      roles: ['admin','cashier'], permission: 'pos.saleReturns.view' },
+  { to: '/pharmacy/customers',        icon: Users,        label: 'Customers',         roles: ['admin'], permission: 'pos.customers.view' },
+  { to: '/pharmacy/suppliers',        icon: Truck,        label: 'Suppliers',         roles: ['admin','pharmacist'], permissions: ['pos.suppliers.view', 'pos.suppliers.create'] },
+  { to: '/pharmacy/expenses',         icon: Receipt,      label: 'Expenses',          roles: ['admin'], permissions: ['pos.expenses.view', 'pos.expenses.create'] },
+  { to: '/pharmacy/reports',          icon: BarChart3,    label: 'Reports',           roles: ['admin'], permission: 'pos.reports.view' },
+  { to: '/pharmacy/users',            icon: UserCog,      label: 'Users',             roles: ['admin'] },
+  { to: '/pharmacy/settings',         icon: SettingsIcon, label: 'Settings',          roles: ['admin'] },
+];
+
 interface Props {
   role: string;
   userProfile?: UserProfile | null;
   userEmail: string;
-  onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLogout?: () => void;
 }
 
-export function Layout({ role, userProfile, userEmail, onSwitchApp, onLogout }: Props) {
+export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [pharmacyOpen, setPharmacyOpen] = useState(false);
+  const location = useLocation();
   const navigate = useNavigate();
+  const hmsAccess = canAccessApp(userProfile || { role }, 'hms');
+  const posAccess = canAccessApp(userProfile || { role }, 'pos');
+  const visiblePharmacy = posAccess
+    ? PHARMACY_NAV.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
+    : [];
+  const pharmacyActive = location.pathname.startsWith('/pharmacy');
+
+  useEffect(() => {
+    if (pharmacyActive) setPharmacyOpen(true);
+  }, [pharmacyActive]);
 
   // ── Keyboard shortcuts ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -93,8 +120,10 @@ export function Layout({ role, userProfile, userEmail, onSwitchApp, onLogout }: 
   const NavGroups = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
     <>
       {NAV.map(({ group, items }) => {
-        const visible = items.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []));
-        if (!visible.length) return null;
+        const visible = hmsAccess
+          ? items.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
+          : [];
+        if (!visible.length && !(group === 'Services' && visiblePharmacy.length)) return null;
         return (
           <div key={group}>
             {(!collapsed || mobile) && (
@@ -127,6 +156,52 @@ export function Layout({ role, userProfile, userEmail, onSwitchApp, onLogout }: 
                   {(mobile || !collapsed) && label}
                 </NavLink>
               ))}
+              {group === 'Services' && visiblePharmacy.length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    title={!mobile && collapsed ? 'Pharmacy' : undefined}
+                    onClick={() => {
+                      if (!mobile && collapsed) {
+                        navigate(visiblePharmacy[0].to);
+                        return;
+                      }
+                      setPharmacyOpen(open => !open);
+                    }}
+                    className={cn(
+                      'flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors w-full',
+                      !mobile && collapsed && 'justify-center px-2',
+                      pharmacyActive
+                        ? mobile ? 'bg-blue-50 text-blue-700' : 'bg-blue-600 text-white'
+                        : mobile ? 'text-slate-700 hover:bg-slate-100 hover:text-slate-900' : 'text-blue-100/70 hover:text-white hover:bg-white/10'
+                    )}
+                  >
+                    <Pill className="w-4 h-4 shrink-0" />
+                    {(mobile || !collapsed) && <span className="flex-1 text-left">Pharmacy</span>}
+                    {(mobile || !collapsed) && <ChevronRight className={cn('w-4 h-4 transition-transform', pharmacyOpen && 'rotate-90')} />}
+                  </button>
+                  {(mobile || !collapsed) && pharmacyOpen && (
+                    <div className={cn('mt-1 space-y-0.5', mobile ? 'pl-4' : 'pl-5')}>
+                      {visiblePharmacy.map(({ to, icon: Icon, label }) => (
+                        <NavLink
+                          key={to}
+                          to={to}
+                          onClick={onNavigate}
+                          className={({ isActive }) => cn(
+                            'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors',
+                            mobile
+                              ? isActive ? 'bg-blue-50 text-blue-700' : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                              : isActive ? 'bg-white/15 text-white' : 'text-blue-100/60 hover:text-white hover:bg-white/10'
+                          )}
+                        >
+                          <Icon className="w-3.5 h-3.5 shrink-0" />
+                          {label}
+                        </NavLink>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         );
@@ -136,25 +211,6 @@ export function Layout({ role, userProfile, userEmail, onSwitchApp, onLogout }: 
 
   const BottomActions = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
     <div className="space-y-0.5">
-      {canAccessApp(userProfile || { role }, 'pos') && (
-        <button
-          onClick={() => {
-            onNavigate?.();
-            onSwitchApp('pos');
-          }}
-          title={!mobile && collapsed ? 'Switch to Pharmacy POS' : undefined}
-          className={cn(
-            'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm transition-colors',
-            mobile
-              ? 'font-medium text-emerald-700 hover:bg-emerald-50'
-              : 'text-emerald-300 hover:bg-emerald-500/20 hover:text-emerald-200',
-            !mobile && collapsed && 'justify-center px-2'
-          )}
-        >
-          <ArrowLeftRight className="w-4 h-4" />
-          {(mobile || !collapsed) && 'Pharmacy POS'}
-        </button>
-      )}
       <button onClick={onLogout || logout}
         title={!mobile && collapsed ? 'Logout' : undefined}
         className={cn(

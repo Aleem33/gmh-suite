@@ -23,52 +23,94 @@ import { AuditLogs } from './pages/AuditLogs';
 import { Schedule } from './pages/Schedule';
 import { BedManagement } from './pages/BedManagement';
 import { useAutoNotifications } from './lib/notifications';
-import { hasPermission, roleOrPermission, type UserProfile } from '../lib/permissions';
+import { canAccessApp, hasAnyPermission, hasPermission, roleOrPermission, type UserProfile } from '../lib/permissions';
+import { Billing as PosBilling } from '../pos/pages/Billing';
+import { Medicines as PosMedicines } from '../pos/pages/Medicines';
+import { Purchases as PosPurchases } from '../pos/pages/Purchases';
+import { PurchaseReturns as PosPurchaseReturns } from '../pos/pages/PurchaseReturns';
+import { SalesHistory as PosSalesHistory } from '../pos/pages/SalesHistory';
+import { SalesReturns as PosSalesReturns } from '../pos/pages/SalesReturns';
+import { Customers as PosCustomers } from '../pos/pages/Customers';
+import { Suppliers as PosSuppliers } from '../pos/pages/Suppliers';
+import { Expenses as PosExpenses } from '../pos/pages/Expenses';
+import { Reports as PosReports } from '../pos/pages/Reports';
+import { Users as PosUsers } from '../pos/pages/Users';
+import { Settings as PosSettings } from '../pos/pages/Settings';
+import { PatientHistory as PosPatientHistory } from '../pos/pages/PatientHistory';
 
 interface Props {
   userRole: string | null;
   userProfile?: UserProfile | null;
   userEmail: string;
-  onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLoginSuccess: () => void;
   onBack?: () => void;
   onLogout?: () => void;
 }
 
-export function HMSApp({ userRole, userProfile, userEmail, onSwitchApp, onLoginSuccess, onBack, onLogout }: Props) {
+export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBack, onLogout }: Props) {
   useAutoNotifications();
 
   if (!userRole) return <Login onLoginSuccess={onLoginSuccess} onBack={onBack} />;
 
   const r = userRole;
   const isAdmin = r === 'admin';
+  const hmsAccess = canAccessApp(userProfile || { role: r }, 'hms');
+  const posAccess = canAccessApp(userProfile || { role: r }, 'pos');
   const clinical = ['admin', 'receptionist', 'doctor', 'nurse'];
   const dashboardRoles = ['admin', 'receptionist', 'doctor'];
-  const canDashboard = roleOrPermission(r, dashboardRoles, userProfile, 'hms.dashboard.view');
-  const canPatients = roleOrPermission(r, clinical, userProfile, ['hms.reception.view', 'hms.ipd.view']);
-  const canReception = roleOrPermission(r, ['admin', 'receptionist'], userProfile, 'hms.reception.view');
-  const canVitals = roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.vitals.view');
-  const canToken = roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.token.view');
-  const canOpd = roleOrPermission(r, ['admin','doctor'], userProfile, 'hms.opd.view');
-  const canIpd = roleOrPermission(r, ['admin','receptionist','doctor'], userProfile, 'hms.ipd.view');
-  const canBilling = roleOrPermission(r, ['admin','cashier'], userProfile, 'hms.billing.create');
+  const canDashboard = hmsAccess && roleOrPermission(r, dashboardRoles, userProfile, 'hms.dashboard.view');
+  const canPatients = hmsAccess && roleOrPermission(r, clinical, userProfile, ['hms.reception.view', 'hms.ipd.view']);
+  const canReception = hmsAccess && roleOrPermission(r, ['admin', 'receptionist'], userProfile, 'hms.reception.view');
+  const canVitals = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.vitals.view');
+  const canToken = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.token.view');
+  const canOpd = hmsAccess && roleOrPermission(r, ['admin','doctor'], userProfile, 'hms.opd.view');
+  const canIpd = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor'], userProfile, 'hms.ipd.view');
+  const canBilling = hmsAccess && roleOrPermission(r, ['admin','cashier'], userProfile, 'hms.billing.create');
   const canCreateOnlyBilling = hasPermission(userProfile, 'hms.billing.create') && !['admin', 'cashier'].includes(r);
+  const canPharmacyOrders = posAccess && (isAdmin || r === 'pharmacist');
+  const canPosDashboard = posAccess && (isAdmin || r === 'pharmacist');
+  const canPosBilling = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, 'pos.billing.create');
+  const canPosMedicines = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.medicines.view');
+  const canPosPurchases = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.purchases.view', 'pos.purchases.create']);
+  const canPosPurchaseReturns = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.purchaseReturns.view');
+  const canPosSales = posAccess && roleOrPermission(r, ['admin', 'cashier', 'pharmacist'], userProfile, 'pos.sales.view');
+  const canPosSaleReturns = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, 'pos.saleReturns.view');
+  const canPosCustomers = posAccess && roleOrPermission(r, ['admin'], userProfile, 'pos.customers.view');
+  const canPosSuppliers = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.suppliers.view', 'pos.suppliers.create']);
+  const canPosExpenses = posAccess && roleOrPermission(r, ['admin'], userProfile, ['pos.expenses.view', 'pos.expenses.create']);
+  const canPosReports = posAccess && roleOrPermission(r, ['admin'], userProfile, 'pos.reports.view');
+  const canPosPatientHistory = posAccess && (isAdmin || r === 'pharmacist' || r === 'cashier');
+  const canAnyPharmacy =
+    canPharmacyOrders || canPosDashboard || canPosBilling || canPosMedicines || canPosPurchases ||
+    canPosPurchaseReturns || canPosSales || canPosSaleReturns || canPosCustomers || canPosSuppliers ||
+    canPosExpenses || canPosReports || canPosPatientHistory || isAdmin;
+  const defaultPharmacyPath =
+    canPharmacyOrders ? '/pharmacy/orders' :
+    canPosBilling ? '/pharmacy/billing' :
+    canPosSales ? '/pharmacy/sales' :
+    canPosCustomers ? '/pharmacy/customers' :
+    canPosMedicines ? '/pharmacy/medicines' :
+    canPosPurchases ? '/pharmacy/purchases' :
+    canPosSuppliers ? '/pharmacy/suppliers' :
+    canPosExpenses ? '/pharmacy/expenses' :
+    canPosReports ? '/pharmacy/reports' : '/';
   const defaultPath =
-    r === 'pharmacist'     ? '/pharmacy' :
-    r === 'lab_technician' ? '/lab'      :
-    r === 'cashier'        ? '/billing'  :
+    r === 'pharmacist'     ? defaultPharmacyPath :
+    r === 'lab_technician' && hmsAccess ? '/lab' :
+    r === 'cashier' && canBilling ? '/billing' :
     r === 'nurse'          ? '/vitals'   :
     canDashboard           ? '/'         :
     canReception           ? '/appointments' :
     canVitals              ? '/vitals'   :
     canIpd                 ? '/ipd'      :
-    canBilling             ? '/billing'  : '/';
+    canBilling             ? '/billing'  :
+    canAnyPharmacy         ? defaultPharmacyPath : '/';
 
   return (
     <ErrorBoundary>
       <HashRouter>
         <Routes>
-          <Route path="/" element={<Layout role={r} userProfile={userProfile} userEmail={userEmail} onSwitchApp={onSwitchApp} onLogout={onLogout} />}>
+          <Route path="/" element={<Layout role={r} userProfile={userProfile} userEmail={userEmail} onLogout={onLogout} />}>
             {canDashboard && <Route index element={<Dashboard />} />}
             {canPatients && <Route path="patients"     element={<Patients />} />}
             {canReception && <Route path="appointments" element={<Appointments />} />}
@@ -78,9 +120,23 @@ export function HMSApp({ userRole, userProfile, userEmail, onSwitchApp, onLoginS
             {canToken && <Route path="token"        element={<TokenDisplay />} />}
             {['admin','doctor'].includes(r)                         && <Route path="prescriptions"         element={<Prescriptions />} />}
             {['admin','doctor'].includes(r)                         && <Route path="prescription-templates" element={<PrescriptionTemplates />} />}
-            {['admin','doctor','lab_technician'].includes(r)        && <Route path="lab"                   element={<Lab />} />}
-            {['admin','pharmacist'].includes(r)                     && <Route path="pharmacy"              element={<Pharmacy />} />}
-            {['admin','pharmacist'].includes(r)                     && <Route path="suppliers"             element={<Suppliers />} />}
+            {hmsAccess && ['admin','doctor','lab_technician'].includes(r) && <Route path="lab"             element={<Lab />} />}
+            {canPharmacyOrders && <Route path="pharmacy/orders" element={<Pharmacy />} />}
+            {canPosBilling && <Route path="pharmacy/billing" element={<PosBilling userProfile={userProfile} />} />}
+            {canPosPatientHistory && <Route path="pharmacy/patient-history" element={<PosPatientHistory />} />}
+            {canPosMedicines && <Route path="pharmacy/medicines" element={<PosMedicines userProfile={userProfile} />} />}
+            {canPosPurchases && <Route path="pharmacy/purchases" element={<PosPurchases />} />}
+            {canPosPurchaseReturns && <Route path="pharmacy/purchase-returns" element={<PosPurchaseReturns readOnly={!hasAnyPermission(userProfile, ['pos.purchaseReturns.create']) && !isAdmin && r !== 'pharmacist'} />} />}
+            {canPosSales && <Route path="pharmacy/sales" element={<PosSalesHistory userProfile={userProfile} />} />}
+            {canPosSaleReturns && <Route path="pharmacy/sale-returns" element={<PosSalesReturns readOnly={!hasAnyPermission(userProfile, ['pos.saleReturns.create']) && !isAdmin && r !== 'cashier'} />} />}
+            {canPosCustomers && <Route path="pharmacy/customers" element={<PosCustomers userProfile={userProfile} />} />}
+            {canPosSuppliers && <Route path="pharmacy/suppliers" element={<PosSuppliers userProfile={userProfile} />} />}
+            {canPosExpenses && <Route path="pharmacy/expenses" element={<PosExpenses userProfile={userProfile} />} />}
+            {canPosReports && <Route path="pharmacy/reports" element={<PosReports />} />}
+            {isAdmin && <Route path="pharmacy/users" element={<PosUsers />} />}
+            {isAdmin && <Route path="pharmacy/settings" element={<PosSettings />} />}
+            {canAnyPharmacy && <Route path="pharmacy" element={<Navigate to={defaultPharmacyPath} replace />} />}
+            {hmsAccess && ['admin','pharmacist'].includes(r) && <Route path="suppliers"             element={<Suppliers />} />}
             {canBilling                                             && <Route path="billing"               element={<Billing userProfile={userProfile} createOnly={canCreateOnlyBilling} />} />}
             {isAdmin && <Route path="staff"    element={<Staff />} />}
             {isAdmin && <Route path="schedule" element={<Schedule />} />}

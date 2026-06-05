@@ -47,7 +47,7 @@ export function useGlobalSearch(query: string) {
     medicines
       .filter(m => m.name?.toLowerCase().includes(q))
       .slice(0, 3)
-      .forEach(m => out.push({ id: m.id, type: 'medicine', title: m.name, subtitle: `Stock: ${m.stock} · Rs. ${m.retailPrice}`, path: '/pharmacy' }));
+      .forEach(m => out.push({ id: m.id, type: 'medicine', title: m.name, subtitle: `Stock: ${m.stock} · Rs. ${m.retailPrice}`, path: '/pharmacy/medicines' }));
 
     setResults(out);
   }, [query, patients, staff, medicines]);

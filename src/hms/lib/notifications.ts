@@ -57,7 +57,7 @@ export function useAutoNotifications() {
               title,
               outOfStock.slice(0, 5).map(m => m.name).join(', ') + (outOfStock.length > 5 ? ` and ${outOfStock.length - 5} more` : ''),
               'error',
-              '/pharmacy'
+              '/pharmacy/orders'
             );
           }
         }
@@ -69,7 +69,7 @@ export function useAutoNotifications() {
               title,
               lowStock.slice(0, 5).map(m => `${m.name} (${m.stock} units left)`).join(', '),
               'warning',
-              '/pharmacy'
+              '/pharmacy/orders'
             );
           }
         }
@@ -81,7 +81,7 @@ export function useAutoNotifications() {
               title,
               expiring7.slice(0, 5).map(m => m.name).join(', '),
               'error',
-              '/pharmacy'
+              '/pharmacy/orders'
             );
           }
         } else if (expiring30.length > 0) {
@@ -91,7 +91,7 @@ export function useAutoNotifications() {
               title,
               expiring30.slice(0, 5).map(m => m.name).join(', '),
               'warning',
-              '/pharmacy'
+              '/pharmacy/orders'
             );
           }
         }

@@ -107,7 +107,7 @@ export function hasAnyPermission(profile: UserProfile | null | undefined, permis
 export function canAccessApp(profile: UserProfile | null | undefined, app: AppAccess): boolean {
   if (!profile) return false;
   if (isAdminProfile(profile)) return true;
-  if (profile.appAccess?.includes(app)) return true;
+  if (profile.appAccess?.length) return profile.appAccess.includes(app);
   if (profile.app === 'all' || profile.app === app) return true;
   if (app === 'hms') return ['receptionist', 'doctor', 'nurse', 'lab_technician', 'cashier', 'pharmacist'].includes(profile.role || '');
   if (app === 'pos') return ['cashier', 'pharmacist'].includes(profile.role || '');
@@ -125,4 +125,3 @@ export function roleOrPermission(
   const keys = Array.isArray(permissions) ? permissions : [permissions];
   return keys.filter(Boolean).some(key => hasPermission(profile, key));
 }
-

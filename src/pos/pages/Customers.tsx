@@ -315,7 +315,7 @@ export function Customers({ userProfile }: CustomersProps) {
 
                     <div className="flex items-center gap-1.5 shrink-0">
                       {canStartSale && <button
-                        onClick={() => navigate(`/billing?customerId=${cust.id}`)}
+                        onClick={() => navigate(`/pharmacy/billing?customerId=${cust.id}`)}
                         className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"
                         title="Start sale for this customer"
                       >

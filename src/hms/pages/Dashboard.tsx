@@ -84,9 +84,9 @@ export function Dashboard() {
     { label: 'Total Patients',        value: stats.totalPatients,                         icon: Users,        color: 'violet', path: '/patients' },
     { label: 'Active IPD',            value: stats.ipdCount,                              icon: BedDouble,    color: 'emerald',path: '/ipd' },
     { label: "OPD Revenue Today",     value: formatCurrency(stats.todayRevenue),          icon: DollarSign,   color: 'green',  path: '/billing' },
-    { label: "POS Revenue Today",     value: formatCurrency(stats.todayPosRevenue),       icon: ShoppingCart, color: 'teal',   path: '/billing' },
+    { label: "POS Revenue Today",     value: formatCurrency(stats.todayPosRevenue),       icon: ShoppingCart, color: 'teal',   path: '/pharmacy/sales' },
     { label: 'Pending Lab Tests',     value: stats.pendingLab,                            icon: FlaskConical, color: 'orange', path: '/lab' },
-    { label: 'Low Stock Medicines',   value: stats.lowStock,                              icon: AlertTriangle,color: 'red',    path: '/pharmacy' },
+    { label: 'Low Stock Medicines',   value: stats.lowStock,                              icon: AlertTriangle,color: 'red',    path: '/pharmacy/medicines' },
     { label: 'Expiring (30 days)',    value: stats.expiringMeds,                          icon: Package,      color: 'pink',   path: '/reports' },
   ];
 
@@ -130,7 +130,7 @@ export function Dashboard() {
       {(stats.lowStock > 0 || stats.expiringMeds > 0) && (
         <div className="flex flex-wrap gap-3">
           {stats.lowStock > 0 && (
-            <button onClick={() => navigate('/pharmacy')}
+            <button onClick={() => navigate('/pharmacy/orders')}
               className="flex items-center gap-2 px-4 py-2.5 bg-red-50 border border-red-200 text-red-700 rounded-xl text-sm font-medium hover:bg-red-100 transition-colors">
               <AlertTriangle className="w-4 h-4" />
               {stats.lowStock} medicine{stats.lowStock !== 1 ? 's' : ''} low on stock - click to view
@@ -228,7 +228,7 @@ export function Dashboard() {
                 <div className="flex items-center gap-2 text-red-700 font-semibold text-sm">
                   <AlertTriangle className="w-4 h-4" /> Low Stock
                 </div>
-                <button onClick={() => navigate('/pharmacy')} className="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1">
+                <button onClick={() => navigate('/pharmacy/medicines')} className="text-xs text-red-600 hover:text-red-700 font-medium flex items-center gap-1">
                   View <ArrowRight className="w-3 h-3" />
                 </button>
               </div>

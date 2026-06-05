@@ -2,7 +2,7 @@
   "name": "gmh-suite",
   "productName": "GMH Suite",
   "private": true,
-  "version": "3.1.30",
+  "version": "3.1.31",
   "description": "GMH Suite Integrated Hospital & Pharmacy Management Suite",
   "author": "GMH Suite",
   "main": "main.js",
@@ -17,6 +17,9 @@
     "electron:dev": "vite build --watch",
     "lint": "tsc --noEmit",
     "icons": "node scripts/generate-icons.mjs",
+    "android:sync": "npm run build && npx cap sync android",
+    "android:open": "npx cap open android",
+    "android:build:debug": "npm run android:sync && cd android && gradlew.bat assembleDebug",
     "dist": "npm run build && electron-builder --win --publish never",
     "release": "npm run build && electron-builder --win --publish always",
     "bump:patch": "npm version patch --no-git-tag-version",
@@ -86,6 +89,13 @@
     }
   },
   "dependencies": {
+    "@capacitor/app": "^8.1.0",
+    "@capacitor/browser": "^8.0.3",
+    "@capacitor/core": "^8.3.4",
+    "@capacitor/filesystem": "^8.1.2",
+    "@capacitor/share": "^8.0.1",
+    "@capacitor/splash-screen": "^8.0.1",
+    "@capacitor/status-bar": "^8.0.2",
     "clsx": "^2.1.1",
     "date-fns": "^3.6.0",
     "electron-updater": "^6.8.3",
@@ -102,6 +112,8 @@
     "tailwind-merge": "^2.5.5"
   },
   "devDependencies": {
+    "@capacitor/android": "^8.3.4",
+    "@capacitor/cli": "^8.3.4",
     "@types/node": "^22.9.1",
     "@types/papaparse": "^5.3.14",
     "@types/react": "^18.3.12",

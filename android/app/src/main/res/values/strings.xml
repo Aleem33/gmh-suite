@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">GMH Suite</string>
+    <string name="title_activity_main">GMH Suite</string>
+    <string name="package_name">com.gmh.suite</string>
+    <string name="custom_url_scheme">com.gmh.suite</string>
+</resources>

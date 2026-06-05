@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, onSnapshot, addDoc, doc, updateDoc, increment, runTransaction } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, doc, getDoc, updateDoc, increment, runTransaction } from 'firebase/firestore';
 import { printOrShare, printPageOrShare } from '../lib/nativeUtils';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
@@ -10,8 +10,13 @@ import {
   UserPlus, Check, X, Pill, ClipboardList, CheckCircle,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { DEFAULT_NON_ADMIN_DISCOUNT_PERCENT, hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
-export function Billing() {
+interface BillingProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Billing({ userProfile }: BillingProps) {
   const [searchParams] = useSearchParams();
   const [medicines, setMedicines]       = useState<any[]>([]);
   const [customers, setCustomers]       = useState<any[]>([]);
@@ -25,6 +30,7 @@ export function Billing() {
   const [pharmacyOrders, setPharmacyOrders] = useState<any[]>([]);
   const [showRxModal, setShowRxModal] = useState(false);
   const [rxSearch, setRxSearch] = useState('');
+  const [maxNonAdminDiscountPercent, setMaxNonAdminDiscountPercent] = useState(DEFAULT_NON_ADMIN_DISCOUNT_PERCENT);
 
   // Mobile: which tab is active
   const [mobileTab, setMobileTab] = useState<'medicines' | 'cart'>('medicines');
@@ -60,6 +66,15 @@ export function Billing() {
       );
     }, err => handleFirestoreError(err, OperationType.GET, 'pharmacyOrders'));
     return () => { unsub1(); unsub2(); unsub3(); };
+  }, []);
+
+  useEffect(() => {
+    getDoc(doc(db, 'settings', 'permissions')).then(snap => {
+      if (snap.exists()) {
+        const next = Number((snap.data() as any).maxNonAdminDiscountPercent);
+        if (Number.isFinite(next)) setMaxNonAdminDiscountPercent(Math.max(0, Math.min(100, next)));
+      }
+    }).catch(err => handleFirestoreError(err, OperationType.GET, 'settings/permissions'));
   }, []);
 
   useEffect(() => {
@@ -103,7 +118,27 @@ export function Billing() {
     (c.phone || '').includes(customerSearch)
   ).slice(0, 8);
 
+  const isAdmin = isAdminProfile(userProfile);
+  const canCreateCustomers = isAdmin || hasPermission(userProfile, 'pos.customers.create');
+  const allowedDiscountPercent = isAdmin ? 100 : hasPermission(userProfile, 'pos.billing.discount') ? maxNonAdminDiscountPercent : 0;
+  const discountCapApplies = !isAdmin;
+  const discountCapLabel = `${allowedDiscountPercent}%`;
+
+  const discountPercentFor = (type: 'rs' | 'pct', value: number, qty: number, price: number) => {
+    const lineTotal = qty * price;
+    if (!lineTotal || !value) return 0;
+    return type === 'pct' ? value : (value / lineTotal) * 100;
+  };
+
+  const rejectOverDiscountCap = (pct: number) => {
+    if (!discountCapApplies || pct <= allowedDiscountPercent) return false;
+    setStockError(`Discount limit is ${discountCapLabel} for non-admin billing users.`);
+    setTimeout(() => setStockError(''), 4000);
+    return true;
+  };
+
   const handleCreateCustomer = async () => {
+    if (!canCreateCustomers) return;
     if (!newCustName.trim()) return;
     setSavingCustomer(true);
     try {
@@ -178,6 +213,7 @@ export function Billing() {
   const updateItemDiscount = (cartItemId: string, type: 'rs' | 'pct', value: number) => {
     setCart(prev => prev.map(item => {
       if (item.cartItemId !== cartItemId) return item;
+      if (rejectOverDiscountCap(discountPercentFor(type, value, item.quantity, item.price))) return item;
       const disc = computeItemDiscountRs(type, value, item.quantity, item.price);
       return { ...item, discountType: type, discountValue: value, itemDiscount: disc, total: Math.max(0, item.quantity * item.price - disc) };
     }));
@@ -240,6 +276,8 @@ export function Billing() {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    if (rejectOverDiscountCap(orderDiscount)) return;
+    if (cart.some(item => rejectOverDiscountCap(discountPercentFor(item.discountType, item.discountValue, item.quantity, item.price)))) return;
     try {
       const saleData: any = {
         items: cart, grossSubtotal, totalItemDiscounts,
@@ -413,7 +451,7 @@ export function Billing() {
                 )}
               </div>
             </div>
-          ) : showCreateForm ? (
+          ) : canCreateCustomers && showCreateForm ? (
             <div className="border border-blue-300 bg-blue-50 rounded-lg p-3 space-y-2">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-xs font-bold text-blue-700 flex items-center gap-1">
@@ -461,14 +499,14 @@ export function Billing() {
                       {c.creditBalance > 0 && <span className="text-xs text-red-600 font-medium shrink-0">Due {formatCurrency(c.creditBalance)}</span>}
                     </button>
                   ))}
-                  <button onPointerDown={e => { e.preventDefault(); setNewCustName(customerSearch); setShowCreateForm(true); setShowCustomerDropdown(false); }}
+                  {canCreateCustomers && <button onPointerDown={e => { e.preventDefault(); setNewCustName(customerSearch); setShowCreateForm(true); setShowCustomerDropdown(false); }}
                     className="w-full text-left px-3 py-2.5 hover:bg-green-50 flex items-center gap-2 text-green-700 border-t border-gray-100 bg-green-50/50">
                     <UserPlus className="w-4 h-4 shrink-0" />
                     <div>
                       <p className="text-xs font-bold">{customerSearch.trim() ? `Create "${customerSearch.trim()}"` : 'Create new customer'}</p>
                       <p className="text-[10px] text-gray-400">Add to customer list & select</p>
                     </div>
-                  </button>
+                  </button>}
                 </div>
               )}
             </>
@@ -562,7 +600,11 @@ export function Billing() {
           <span>Order Discount</span>
           <div className="flex items-center gap-1">
             <input type="number" min="0" max="100" value={orderDiscount || ''} placeholder="0"
-              onChange={e => setOrderDiscount(Number(e.target.value))}
+              onChange={e => {
+                const next = Number(e.target.value);
+                if (rejectOverDiscountCap(next)) return;
+                setOrderDiscount(next);
+              }}
               className="w-14 p-1 text-right border border-gray-200 rounded focus:outline-none focus:border-blue-400 text-sm bg-white" />
             <span className="text-gray-400">%</span>
           </div>

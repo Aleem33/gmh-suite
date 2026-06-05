@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
-import { Plus, Edit2, Trash2, Search, Receipt, X } from 'lucide-react';
+import { CheckCircle, Plus, Edit2, Trash2, Search, Receipt, X } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 const CATEGORIES = ['Utility', 'Rent', 'Salary', 'Maintenance', 'Supplies', 'Other'];
 
@@ -16,7 +17,11 @@ const CATEGORY_COLORS: Record<string, string> = {
   Other:       'bg-gray-100 text-gray-800',
 };
 
-export function Expenses() {
+interface ExpensesProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Expenses({ userProfile }: ExpensesProps) {
   const [expenses, setExpenses]     = useState<any[]>([]);
   const [search, setSearch]         = useState('');
   const [isModalOpen, setIsModalOpen]   = useState(false);
@@ -27,6 +32,12 @@ export function Expenses() {
     description: '', amount: '', category: 'Utility',
     date: format(new Date(), 'yyyy-MM-dd'),
   });
+
+  const isAdmin = isAdminProfile(userProfile);
+  const canCreate = isAdmin || hasPermission(userProfile, 'pos.expenses.create');
+  const canEdit = isAdmin;
+  const canDelete = isAdmin;
+  const canApprove = isAdmin;
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'expenses'), snap => {
@@ -42,20 +53,28 @@ export function Expenses() {
     e.category.toLowerCase().includes(search.toLowerCase())
   );
 
-  const totalAmount = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+  const approvedExpenses = filteredExpenses.filter(e => (e.status || 'approved') === 'approved');
+  const totalAmount = approvedExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingId && !canEdit) return;
+    if (!editingId && !canCreate) return;
     try {
       const data = {
         description: formData.description, amount: parseFloat(formData.amount || '0'),
         category: formData.category, date: formData.date,
         addedBy: auth.currentUser?.uid || 'unknown',
+        createdBy: auth.currentUser?.uid || 'unknown',
       };
       if (editingId) {
         await updateDoc(doc(db, 'expenses', editingId), data);
       } else {
-        await addDoc(collection(db, 'expenses'), { ...data, createdAt: new Date().toISOString() });
+        await addDoc(collection(db, 'expenses'), {
+          ...data,
+          status: isAdmin ? 'approved' : 'pending',
+          createdAt: new Date().toISOString(),
+        });
       }
       setIsModalOpen(false); setEditingId(null);
     } catch (error) {
@@ -64,21 +83,46 @@ export function Expenses() {
   };
 
   const handleEdit = (exp: any) => {
+    if (!canEdit) return;
     setFormData({ description: exp.description, amount: exp.amount.toString(), category: exp.category, date: exp.date });
     setEditingId(exp.id); setIsModalOpen(true);
   };
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
+    if (!canDelete) return;
     try { await deleteDoc(doc(db, 'expenses', confirmDeleteId)); }
     catch (error) { handleFirestoreError(error, OperationType.DELETE, `expenses/${confirmDeleteId}`); }
     finally { setConfirmDeleteId(null); }
   };
 
   const openAdd = () => {
+    if (!canCreate) return;
     setEditingId(null);
     setFormData({ description: '', amount: '', category: 'Utility', date: format(new Date(), 'yyyy-MM-dd') });
     setIsModalOpen(true);
+  };
+
+  const updateExpenseStatus = async (id: string, status: 'approved' | 'rejected') => {
+    if (!canApprove) return;
+    try {
+      await updateDoc(doc(db, 'expenses', id), {
+        status,
+        reviewedBy: auth.currentUser?.uid || 'unknown',
+        reviewedAt: new Date().toISOString(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `expenses/${id}`);
+    }
+  };
+
+  const statusBadge = (status: string = 'approved') => {
+    const map: Record<string, string> = {
+      approved: 'bg-green-100 text-green-700',
+      pending: 'bg-yellow-100 text-yellow-700',
+      rejected: 'bg-red-100 text-red-700',
+    };
+    return <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${map[status] || map.approved}`}>{status}</span>;
   };
 
   return (
@@ -106,12 +150,12 @@ export function Expenses() {
             <p className="text-sm text-red-600 font-medium mt-0.5">Total: {formatCurrency(totalAmount)}</p>
           )}
         </div>
-        <button onClick={openAdd}
+        {canCreate && <button onClick={openAdd}
           className="bg-blue-600 text-white px-3 py-2 md:px-4 rounded-lg flex items-center gap-2 hover:bg-blue-700 text-sm font-medium shrink-0">
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">Add Expense</span>
           <span className="sm:hidden">Add</span>
-        </button>
+        </button>}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -134,6 +178,7 @@ export function Expenses() {
                   <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${CATEGORY_COLORS[exp.category] || CATEGORY_COLORS.Other}`}>
                     {exp.category}
                   </span>
+                  {statusBadge(exp.status || 'approved')}
                 </div>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {exp.date ? format(new Date(exp.date), 'MMM dd, yyyy') : 'N/A'}
@@ -141,12 +186,18 @@ export function Expenses() {
               </div>
               <div className="flex items-center gap-2 shrink-0">
                 <span className="font-bold text-gray-900">{formatCurrency(exp.amount)}</span>
-                <button onClick={() => handleEdit(exp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
+                {canApprove && (exp.status || 'approved') === 'pending' && (
+                  <>
+                    <button onClick={() => updateExpenseStatus(exp.id, 'approved')} className="p-1.5 text-green-600 hover:bg-green-50 rounded" title="Approve"><CheckCircle className="w-4 h-4" /></button>
+                    <button onClick={() => updateExpenseStatus(exp.id, 'rejected')} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Reject"><X className="w-4 h-4" /></button>
+                  </>
+                )}
+                {canEdit && <button onClick={() => handleEdit(exp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
                   <Edit2 className="w-4 h-4" />
-                </button>
-                <button onClick={() => setConfirmDeleteId(exp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
+                </button>}
+                {canDelete && <button onClick={() => setConfirmDeleteId(exp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
                   <Trash2 className="w-4 h-4" />
-                </button>
+                </button>}
               </div>
             </div>
           ))}
@@ -169,6 +220,7 @@ export function Expenses() {
                 <th className="p-4 font-medium">Date</th>
                 <th className="p-4 font-medium">Description</th>
                 <th className="p-4 font-medium">Category</th>
+                <th className="p-4 font-medium">Status</th>
                 <th className="p-4 font-medium">Amount</th>
                 <th className="p-4 font-medium text-right">Actions</th>
               </tr>
@@ -187,21 +239,28 @@ export function Expenses() {
                       {exp.category}
                     </span>
                   </td>
+                  <td className="p-4">{statusBadge(exp.status || 'approved')}</td>
                   <td className="p-4 font-medium text-gray-900">{formatCurrency(exp.amount)}</td>
                   <td className="p-4 flex justify-end gap-2">
-                    <button onClick={() => handleEdit(exp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
-                    <button onClick={() => setConfirmDeleteId(exp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                    {canApprove && (exp.status || 'approved') === 'pending' && (
+                      <>
+                        <button onClick={() => updateExpenseStatus(exp.id, 'approved')} className="p-1.5 text-green-600 hover:bg-green-50 rounded" title="Approve"><CheckCircle className="w-4 h-4" /></button>
+                        <button onClick={() => updateExpenseStatus(exp.id, 'rejected')} className="p-1.5 text-red-600 hover:bg-red-50 rounded" title="Reject"><X className="w-4 h-4" /></button>
+                      </>
+                    )}
+                    {canEdit && <button onClick={() => handleEdit(exp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>}
+                    {canDelete && <button onClick={() => setConfirmDeleteId(exp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>}
                   </td>
                 </tr>
               ))}
               {filteredExpenses.length === 0 && (
-                <tr><td colSpan={5} className="p-8 text-center text-gray-500">No expenses found.</td></tr>
+                <tr><td colSpan={6} className="p-8 text-center text-gray-500">No expenses found.</td></tr>
               )}
             </tbody>
             {filteredExpenses.length > 0 && (
               <tfoot>
                 <tr className="bg-gray-50 border-t-2 border-gray-200 font-bold text-sm">
-                  <td className="p-4 text-gray-700" colSpan={3}>TOTAL — {filteredExpenses.length} expense(s)</td>
+                  <td className="p-4 text-gray-700" colSpan={4}>APPROVED TOTAL - {approvedExpenses.length} of {filteredExpenses.length} expense(s)</td>
                   <td className="p-4 text-red-600 text-base">{formatCurrency(totalAmount)}</td>
                   <td className="p-4" />
                 </tr>

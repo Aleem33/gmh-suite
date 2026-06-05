@@ -64,9 +64,10 @@ export function Reports() {
       .map((item: any) => ({ sale, item }))
   );
 
+  const approvedExpenses = expenses.filter(e => (e.status || 'approved') === 'approved');
   const filteredExpenses = dateRange
-    ? expenses.filter(e => { const d = e.date ? new Date(e.date) : null; return d ? isWithinInterval(d, dateRange) : false; })
-    : expenses;
+    ? approvedExpenses.filter(e => { const d = e.date ? new Date(e.date) : null; return d ? isWithinInterval(d, dateRange) : false; })
+    : approvedExpenses;
 
   const totalRevenue  = categoryFilter === 'all'
     ? filteredSales.reduce((sum, s) => sum + (s.total || 0), 0)

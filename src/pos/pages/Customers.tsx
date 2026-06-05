@@ -12,8 +12,13 @@ import {
   Eye, X, Wallet, CheckCircle, Clock, CreditCard, Printer, ShoppingCart
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
-export function Customers() {
+interface CustomersProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Customers({ userProfile }: CustomersProps) {
   const navigate = useNavigate();
   const [customers, setCustomers]       = useState<any[]>([]);
   const [sales, setSales]               = useState<any[]>([]);
@@ -32,6 +37,12 @@ export function Customers() {
   const [paymentLoading, setPaymentLoading] = useState(false);
 
   const [formData, setFormData] = useState({ name: '', phone: '', creditBalance: '0' });
+  const isAdmin = isAdminProfile(userProfile);
+  const canCreate = isAdmin || hasPermission(userProfile, 'pos.customers.create');
+  const canEdit = isAdmin || hasPermission(userProfile, 'pos.customers.edit');
+  const canDelete = isAdmin || hasPermission(userProfile, 'pos.customers.delete');
+  const canRecordPayments = isAdmin || userProfile?.role === 'cashier';
+  const canStartSale = isAdmin || userProfile?.role === 'cashier' || hasPermission(userProfile, 'pos.billing.create');
 
   useEffect(() => {
     const unsub1 = onSnapshot(collection(db, 'customers'), snap => {
@@ -72,12 +83,14 @@ export function Customers() {
   const totalPending = filteredCustomers.reduce((sum, c) => sum + getCustomerTotals(c.id).pending, 0);
 
   const openReceiptPayment = (cust: any, sale: any) => {
+    if (!canRecordPayments) return;
     setPaymentModal({ customer: cust, sale });
     setPaymentAmount('');
     setPaymentNote('');
   };
 
   const handleRecordPayment = async () => {
+    if (!canRecordPayments) return;
     if (!paymentModal?.customer || !paymentModal?.sale) return;
     const amount = parseFloat(paymentAmount);
     if (!amount || amount <= 0) return;
@@ -114,6 +127,8 @@ export function Customers() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingId && !canEdit) return;
+    if (!editingId && !canCreate) return;
     try {
       const data = { name: formData.name, phone: formData.phone, creditBalance: Number(formData.creditBalance) };
       if (editingId) {
@@ -134,12 +149,14 @@ export function Customers() {
   };
 
   const handleEdit = (cust: any) => {
+    if (!canEdit) return;
     setFormData({ name: cust.name, phone: cust.phone || '', creditBalance: String(cust.creditBalance || 0) });
     setEditingId(cust.id); setIsModalOpen(true);
   };
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
+    if (!canDelete) return;
     try { await deleteDoc(doc(db, 'customers', confirmDeleteId)); }
     catch (error) { handleFirestoreError(error, OperationType.DELETE, `customers/${confirmDeleteId}`); }
     finally { setConfirmDeleteId(null); }
@@ -255,12 +272,12 @@ export function Customers() {
             </p>
           )}
         </div>
-        <button
+        {canCreate && <button
           onClick={() => { setEditingId(null); setFormData({ name: '', phone: '', creditBalance: '0' }); setIsModalOpen(true); }}
           className="bg-blue-600 text-white px-3 py-2 md:px-4 rounded-lg flex items-center gap-2 hover:bg-blue-700 text-sm font-medium shrink-0"
         >
           <Plus className="w-4 h-4" /> <span className="hidden sm:inline">Add Customer</span><span className="sm:hidden">Add</span>
-        </button>
+        </button>}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -297,13 +314,13 @@ export function Customers() {
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <button
+                      {canStartSale && <button
                         onClick={() => navigate(`/billing?customerId=${cust.id}`)}
                         className="flex items-center gap-1 px-2.5 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"
                         title="Start sale for this customer"
                       >
                         <ShoppingCart className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Sale</span>
-                      </button>
+                      </button>}
                       {customerSales(cust.id).length > 0 && (
                         <button
                           onClick={() => handlePrintAllBills(cust)}
@@ -313,12 +330,12 @@ export function Customers() {
                           <Printer className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Print</span>
                         </button>
                       )}
-                      <button onClick={() => handleEdit(cust)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
+                      {canEdit && <button onClick={() => handleEdit(cust)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
                         <Edit2 className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setConfirmDeleteId(cust.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
+                      </button>}
+                      {canDelete && <button onClick={() => setConfirmDeleteId(cust.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
                         <Trash2 className="w-4 h-4" />
-                      </button>
+                      </button>}
                     </div>
                   </div>
 
@@ -393,7 +410,7 @@ export function Customers() {
                                   </p>
                                 </div>
                               </div>
-                              {(sale.pendingAmount || 0) > 0 && (
+                              {canRecordPayments && (sale.pendingAmount || 0) > 0 && (
                                 <button
                                   onClick={() => openReceiptPayment(cust, sale)}
                                   className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700"
@@ -449,7 +466,7 @@ export function Customers() {
                                   </td>
                                   <td className="p-3 text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                      {(sale.pendingAmount || 0) > 0 && (
+                                      {canRecordPayments && (sale.pendingAmount || 0) > 0 && (
                                         <button onClick={() => openReceiptPayment(cust, sale)}
                                           className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700">
                                           <Wallet className="w-3.5 h-3.5" /> Pay
@@ -731,7 +748,7 @@ export function Customers() {
                   <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg">
                     <span>Pending</span><span>{formatCurrency(selectedSale.pendingAmount)}</span>
                   </div>
-                  {customers.find(c => c.id === selectedSale.customerId) && (
+                  {canRecordPayments && customers.find(c => c.id === selectedSale.customerId) && (
                     <button
                       onClick={() => {
                         const cust = customers.find(c => c.id === selectedSale.customerId);

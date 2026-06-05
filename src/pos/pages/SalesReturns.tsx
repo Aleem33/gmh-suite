@@ -69,7 +69,11 @@ function printSlip(slipHtml: string) {
   printOrShare(slipHtml, 'sale-return-slip.html');
 }
 
-export function SalesReturns() {
+interface SalesReturnsProps {
+  readOnly?: boolean;
+}
+
+export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
   const [sales, setSales] = useState<any[]>([]);
   const [returns, setReturns] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -109,6 +113,7 @@ export function SalesReturns() {
   };
 
   const openReturn = (sale: any) => {
+    if (readOnly) return;
     setSelectedSale(sale);
     setReturnItems(
       sale.items.map((item: any) => ({
@@ -198,6 +203,7 @@ export function SalesReturns() {
   };
 
   const handleSubmit = async () => {
+    if (readOnly) return;
     if (!hasAnyReturn || !selectedSale || submitting) return;
     setSubmitting(true);
     try {
@@ -287,12 +293,12 @@ export function SalesReturns() {
                       </span>
                     )}
                   </div>
-                  <button
+                  {!readOnly && <button
                     onClick={() => openReturn(sale)}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-100"
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Return
-                  </button>
+                  </button>}
                 </div>
               );
             })}
@@ -340,7 +346,7 @@ export function SalesReturns() {
       </div>
 
       {/* Process Return Modal */}
-      {selectedSale && (
+      {!readOnly && selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg my-8">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center">

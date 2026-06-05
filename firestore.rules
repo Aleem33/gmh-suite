@@ -12,6 +12,14 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
     }
 
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function hasPerm(permission) {
+      return isAuth() && userDoc().permissions[permission] == true;
+    }
+
     function isAdmin()        { return isAuth() && userRole() == 'admin'; }
     function isDoctor()       { return isAuth() && userRole() == 'doctor'; }
     function isReceptionist() { return isAuth() && userRole() == 'receptionist'; }
@@ -82,7 +90,8 @@ service cloud.firestore {
     // ── Medicines ──────────────────────────────────────────────────────────────
     match /medicines/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isPharmacist();
+      allow create: if isAdmin() || isPharmacist();
+      allow update: if isAdmin() || isPharmacist() || hasPerm('pos.billing.create') || hasPerm('pos.purchases.create');
       allow delete: if isAdmin();
     }
 
@@ -90,7 +99,7 @@ service cloud.firestore {
     match /pharmacyOrders/{doc} {
       allow read: if isAuth();
       allow create: if isAdmin() || isClinical() || isReceptionist();
-      allow update: if isAdmin() || isPharmacist();
+      allow update: if isAdmin() || isPharmacist() || hasPerm('pos.billing.create');
       allow delete: if isAdmin();
     }
 
@@ -111,7 +120,8 @@ service cloud.firestore {
     // ── Billing ────────────────────────────────────────────────────────────────
     match /bills/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isReceptionist() || isAccountant() || isCashier();
+      allow create: if isAdmin() || isReceptionist() || isAccountant() || isCashier() || hasPerm('hms.billing.create');
+      allow update: if isAdmin() || isReceptionist() || isAccountant() || isCashier();
       allow delete: if isAdmin();
     }
 
@@ -124,15 +134,18 @@ service cloud.firestore {
 
     // ── Expenses ───────────────────────────────────────────────────────────────
     match /expenses/{doc} {
-      allow read: if isAdmin() || isAccountant() || isReceptionist();
-      allow create, update: if isAdmin() || isAccountant();
+      allow read: if isAdmin() || isAccountant() || isReceptionist() || hasPerm('pos.expenses.view') || hasPerm('pos.expenses.create');
+      allow create: if isAdmin() || isAccountant() || hasPerm('pos.expenses.create');
+      allow update: if isAdmin() || isAccountant();
       allow delete: if isAdmin();
     }
 
     // ── Suppliers ──────────────────────────────────────────────────────────────
     match /suppliers/{doc} {
       allow read: if isAuth();
-      allow write: if isAdmin() || isAccountant() || isPharmacist();
+      allow create: if isAdmin() || isAccountant() || isPharmacist() || hasPerm('pos.suppliers.create');
+      allow update: if isAdmin() || isAccountant() || isPharmacist();
+      allow delete: if isAdmin();
     }
 
     // ── IPD ────────────────────────────────────────────────────────────────────
@@ -199,7 +212,8 @@ service cloud.firestore {
 
     match /sales/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isPharmacist() || isCashier();
+      allow create: if isAdmin() || isPharmacist() || isCashier() || hasPerm('pos.billing.create');
+      allow update: if isAdmin() || isPharmacist() || isCashier();
       allow delete: if isAdmin();
     }
 
@@ -211,7 +225,8 @@ service cloud.firestore {
 
     match /purchases/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isPharmacist();
+      allow create: if isAdmin() || isPharmacist() || hasPerm('pos.purchases.create');
+      allow update: if isAdmin() || isPharmacist();
       allow delete: if isAdmin();
     }
 
@@ -229,12 +244,13 @@ service cloud.firestore {
 
     match /customers/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isCashier();
+      allow create: if isAdmin() || isCashier() || hasPerm('pos.customers.create');
+      allow update: if isAdmin() || isCashier() || hasPerm('pos.customers.edit') || hasPerm('pos.billing.create');
       allow delete: if isAdmin();
     }
 
     match /customerPayments/{doc} {
-      allow read: if isAdmin() || isCashier();
+      allow read: if isAdmin() || isCashier() || hasPerm('pos.customers.view');
       allow create, update: if isAdmin() || isCashier();
       allow delete: if isAdmin();
     }

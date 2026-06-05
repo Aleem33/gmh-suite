@@ -6,10 +6,15 @@ import { formatCurrency } from '../lib/utils';
 import { Plus, Edit2, Trash2, Search, AlertCircle, Upload, Download, X } from 'lucide-react';
 import { format, isBefore, addDays } from 'date-fns';
 import Papa from 'papaparse';
+import { isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 const ITEM_CATEGORIES = ['Medicine', 'Cold Drinks', 'Snacks', 'Grocery', 'Personal Care', 'Other'];
 
-export function Medicines() {
+interface MedicinesProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Medicines({ userProfile }: MedicinesProps) {
   const [medicines, setMedicines]       = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [isModalOpen, setIsModalOpen]   = useState(false);
@@ -26,6 +31,8 @@ export function Medicines() {
     stockBoxes: '0', stockLoose: '0',
     expiryDate: '', batchNo: '',
   });
+  const canManage = isAdminProfile(userProfile) || userProfile?.role === 'pharmacist';
+  const canDelete = isAdminProfile(userProfile);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'medicines'), snap => {
@@ -53,6 +60,7 @@ export function Medicines() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManage) return;
     try {
       const totalStock = (parseInt(formData.stockBoxes || '0') * parseInt(formData.unitsPerBox || '1')) + parseInt(formData.stockLoose || '0');
       const data = {
@@ -75,6 +83,7 @@ export function Medicines() {
   };
 
   const handleEdit = (med: any) => {
+    if (!canManage) return;
     const unitsPerBox = med.unitsPerBox || 1;
     setFormData({
       name: med.name, category: med.category || 'Medicine', form: med.form || 'Tablet',
@@ -91,6 +100,7 @@ export function Medicines() {
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
+    if (!canDelete) return;
     try { await deleteDoc(doc(db, 'medicines', confirmDeleteId)); }
     catch (error) { handleFirestoreError(error, OperationType.DELETE, `medicines/${confirmDeleteId}`); }
     finally { setConfirmDeleteId(null); }
@@ -185,7 +195,7 @@ export function Medicines() {
       {/* Header */}
       <div className="flex justify-between items-center gap-2">
         <h1 className="text-xl md:text-2xl font-bold text-gray-900">Medicines</h1>
-        <div className="flex gap-2">
+        {canManage && <div className="flex gap-2">
           <button onClick={() => setIsCsvModalOpen(true)}
             className="bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg flex items-center gap-1.5 hover:bg-gray-50 text-sm font-medium">
             <Upload className="w-4 h-4" />
@@ -202,7 +212,7 @@ export function Medicines() {
             <span className="hidden sm:inline">Add Medicine</span>
             <span className="sm:hidden">Add</span>
           </button>
-        </div>
+        </div>}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -233,14 +243,14 @@ export function Medicines() {
                     {med.form}{med.unitsPerBox > 1 ? ` • ${med.unitsPerBox}/box` : ''} • #{med.batchNo}
                   </p>
                 </div>
-                <div className="flex gap-1 shrink-0">
+                {canManage && <div className="flex gap-1 shrink-0">
                   <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
                     <Edit2 className="w-4 h-4" />
                   </button>
-                  <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
+                  {canDelete && <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
                     <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                  </button>}
+                </div>}
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -301,8 +311,8 @@ export function Medicines() {
                     </div>
                   </td>
                   <td className="p-4 flex justify-end gap-2">
-                    <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
-                    <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                    {canManage && <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>}
+                    {canDelete && <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>}
                   </td>
                 </tr>
               ))}

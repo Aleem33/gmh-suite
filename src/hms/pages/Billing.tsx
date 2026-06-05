@@ -6,11 +6,17 @@ import { logAudit } from '../lib/audit';
 import { Plus, Search, X, Printer, CheckCircle } from 'lucide-react';
 import { printBill } from '../lib/pdf';
 import { useAppDialog } from '../../components/AppDialog';
+import type { UserProfile } from '../../lib/permissions';
 
 const PAYMENT_METHODS = ['Cash', 'Card', 'Online Transfer', 'Cheque'];
 const ITEM_CATEGORIES = ['Consultation', 'Lab Test', 'Medicine', 'IPD Charges', 'Procedure', 'Other'];
 
-export function Billing() {
+interface BillingProps {
+  userProfile?: UserProfile | null;
+  createOnly?: boolean;
+}
+
+export function Billing({ createOnly = false }: BillingProps) {
   const { alert } = useAppDialog();
   const [bills, setBills] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
@@ -73,6 +79,21 @@ export function Billing() {
         createdAt: nowISO(),
       });
       await logAudit('create', 'bill', ref.id, `${billNo} — ${form.patientName} — Rs.${total}`);
+      setViewBill({
+        id: ref.id,
+        ...form,
+        billNo,
+        items,
+        subtotal,
+        discount,
+        total,
+        paid,
+        balance,
+        paymentStatus,
+        cashierId: auth.currentUser?.uid,
+        cashierName: auth.currentUser?.email,
+        createdAt: nowISO(),
+      });
       setShowModal(false);
       setItems([]);
       setForm({ patientId: '', patientName: '', patientMRN: '', date: today(), paymentMethod: 'Cash', discount: '0', paid: '0', notes: '' });
@@ -113,7 +134,8 @@ export function Billing() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Billing</h1>
-          <p className="text-sm text-gray-500">Today: {formatCurrency(todayRevenue)} collected · {formatCurrency(pendingRevenue)} pending</p>
+          {!createOnly && <p className="text-sm text-gray-500">Today: {formatCurrency(todayRevenue)} collected · {formatCurrency(pendingRevenue)} pending</p>}
+          {createOnly && <p className="text-sm text-gray-500">Create new bills only</p>}
         </div>
         <button onClick={() => { setForm({ patientId: '', patientName: '', patientMRN: '', date: today(), paymentMethod: 'Cash', discount: '0', paid: '0', notes: '' }); setItems([]); setError(''); setShowModal(true); }}
           className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700">
@@ -121,7 +143,7 @@ export function Billing() {
         </button>
       </div>
 
-      <div className="flex items-center gap-3">
+      {!createOnly && <div className="flex items-center gap-3">
         <div className="flex bg-gray-100 rounded-lg p-1 gap-1">
           {(['all', 'pending', 'partial', 'paid', 'cancelled', 'no-show'] as const).map(s => (
             <button key={s} onClick={() => setStatusFilter(s)} className={`px-3 py-1.5 rounded-md text-xs font-medium ${statusFilter === s ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>{s}</button>
@@ -131,9 +153,9 @@ export function Billing() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search patient or bill number..." className="w-full pl-9 pr-4 py-2.5 bg-white border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
-      </div>
+      </div>}
 
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
+      {!createOnly && <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         <table className="w-full">
           <thead className="bg-gray-50 border-b border-gray-100">
             <tr>{['Bill No.', 'Patient', 'Date', 'Total', 'Paid', 'Balance', 'Status', ''].map(h => (
@@ -168,7 +190,7 @@ export function Billing() {
             ))}
           </tbody>
         </table>
-      </div>
+      </div>}
 
       {/* New Bill Modal */}
       {showModal && (

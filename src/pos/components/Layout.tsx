@@ -8,34 +8,36 @@ import {
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
+import { canAccessApp, roleOrPermission, type UserProfile } from '../../lib/permissions';
 
 const allNavItems = [
   { to: '/',                 icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin', 'pharmacist'] },
-  { to: '/billing',          icon: ShoppingCart,    label: 'Billing',          roles: ['admin', 'cashier'] },
+  { to: '/billing',          icon: ShoppingCart,    label: 'Billing',          roles: ['admin', 'cashier'], permission: 'pos.billing.create' },
   { to: '/patient-history',  icon: ClipboardList,   label: 'Patient Rx',       roles: ['admin', 'pharmacist', 'cashier'] },
-  { to: '/purchases',        icon: PackagePlus,     label: 'Purchases',        roles: ['admin', 'pharmacist'] },
-  { to: '/purchase-returns', icon: RotateCcw,       label: 'Purchase Returns', roles: ['admin', 'pharmacist'] },
-  { to: '/sales',            icon: History,         label: 'Sales History',    roles: ['admin', 'cashier', 'pharmacist'] },
-  { to: '/sale-returns',     icon: RotateCcw,       label: 'Sale Returns',     roles: ['admin', 'cashier'] },
-  { to: '/medicines',        icon: Pill,            label: 'Medicines',        roles: ['admin', 'pharmacist'] },
-  { to: '/customers',        icon: Users,           label: 'Customers',        roles: ['admin'] },
-  { to: '/suppliers',        icon: Truck,           label: 'Suppliers',        roles: ['admin', 'pharmacist'] },
-  { to: '/expenses',         icon: Receipt,         label: 'Expenses',         roles: ['admin'] },
-  { to: '/reports',          icon: BarChart3,       label: 'Reports',          roles: ['admin'] },
+  { to: '/purchases',        icon: PackagePlus,     label: 'Purchases',        roles: ['admin', 'pharmacist'], permissions: ['pos.purchases.view', 'pos.purchases.create'] },
+  { to: '/purchase-returns', icon: RotateCcw,       label: 'Purchase Returns', roles: ['admin', 'pharmacist'], permission: 'pos.purchaseReturns.view' },
+  { to: '/sales',            icon: History,         label: 'Sales History',    roles: ['admin', 'cashier', 'pharmacist'], permission: 'pos.sales.view' },
+  { to: '/sale-returns',     icon: RotateCcw,       label: 'Sale Returns',     roles: ['admin', 'cashier'], permission: 'pos.saleReturns.view' },
+  { to: '/medicines',        icon: Pill,            label: 'Medicines',        roles: ['admin', 'pharmacist'], permission: 'pos.medicines.view' },
+  { to: '/customers',        icon: Users,           label: 'Customers',        roles: ['admin'], permission: 'pos.customers.view' },
+  { to: '/suppliers',        icon: Truck,           label: 'Suppliers',        roles: ['admin', 'pharmacist'], permissions: ['pos.suppliers.view', 'pos.suppliers.create'] },
+  { to: '/expenses',         icon: Receipt,         label: 'Expenses',         roles: ['admin'], permissions: ['pos.expenses.view', 'pos.expenses.create'] },
+  { to: '/reports',          icon: BarChart3,       label: 'Reports',          roles: ['admin'], permission: 'pos.reports.view' },
   { to: '/users',            icon: UserCog,         label: 'Users',            roles: ['admin'] },
   { to: '/settings',         icon: Settings,        label: 'Settings',         roles: ['admin'] },
 ];
 
 interface Props {
   role: string;
+  userProfile?: UserProfile | null;
   onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLogout?: () => void;
 }
 
-export function Layout({ role, onSwitchApp, onLogout }: Props) {
-  const navItems = allNavItems.filter(item => item.roles.includes(role));
+export function Layout({ role, userProfile, onSwitchApp, onLogout }: Props) {
+  const navItems = allNavItems.filter(item => roleOrPermission(role, item.roles, userProfile, (item as any).permissions || (item as any).permission || []));
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const canSwitchToHospital = role === 'admin' || role === 'pharmacist';
+  const canSwitchToHospital = canAccessApp(userProfile || { role }, 'hms');
   const handleLogout = onLogout || logout;
 
   const NavItems = ({ onNavigate }: { onNavigate?: () => void }) => (

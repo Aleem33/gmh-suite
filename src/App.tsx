@@ -8,6 +8,7 @@ import { HMSApp } from './hms/HMSApp';
 import { POSApp } from './pos/POSApp';
 import { GlobalAppNotifications } from './components/GlobalAppNotifications';
 import { AppDialogProvider } from './components/AppDialog';
+import { canAccessApp, type UserProfile } from './lib/permissions';
 
 type AppMode = 'hms' | 'pos' | null;
 const FIRST_ADMIN_EMAIL = 'admin@gmh-suite.internal';
@@ -16,6 +17,7 @@ export default function App() {
   const [appMode, setAppMode]       = useState<AppMode>(null);
   const [user, setUser]             = useState<any>(undefined);   // undefined = still loading
   const [userRole, setUserRole]     = useState<string | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [userEmail, setUserEmail]   = useState('');
   const [authError, setAuthError]   = useState('');
 
@@ -38,24 +40,41 @@ export default function App() {
                 email: FIRST_ADMIN_EMAIL,
                 role: 'admin',
                 app: 'all',
+                appAccess: ['hms', 'pos'],
+                permissions: {},
                 createdAt: new Date().toISOString(),
               });
               setUserRole('admin');
+              setUserProfile({
+                uid: u.uid,
+                name: 'Administrator',
+                username: 'admin',
+                email: FIRST_ADMIN_EMAIL,
+                role: 'admin',
+                app: 'all',
+                appAccess: ['hms', 'pos'],
+                permissions: {},
+              });
             } else {
               setAuthError('Your account has not been configured yet. Please contact your administrator.');
               await logout();
               setUserRole(null);
+              setUserProfile(null);
               setUserEmail('');
             }
           } else {
-            setUserRole(snap.data().role || 'cashier');
+            const profile = { uid: u.uid, ...snap.data() } as UserProfile;
+            setUserRole(profile.role || 'cashier');
+            setUserProfile(profile);
           }
         } catch {
           setAuthError('Failed to load your account. Make sure the first admin user is configured in Firestore.');
           await logout();
+          setUserProfile(null);
         }
       } else {
         setUserRole(null);
+        setUserProfile(null);
         setUserEmail('');
         setUser(null);
         // Only go back to selector if we're not in the middle of switching apps
@@ -145,16 +164,36 @@ export default function App() {
 
   // ── Step 3: Inside the app ──────────────────────────────────────────────────
   if (appMode === 'hms') {
+    if (userProfile && !canAccessApp(userProfile, 'hms')) {
+      return withShell(<div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 max-w-sm text-center">
+          <h1 className="font-semibold text-slate-900 mb-2">Hospital access is not enabled</h1>
+          <p className="text-sm text-slate-500 mb-4">Please switch to an app assigned to your account.</p>
+          <button onClick={() => setAppMode(null)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium">Choose App</button>
+        </div>
+      </div>);
+    }
     return withShell(<HMSApp
       userRole={userRole}
+      userProfile={userProfile}
       userEmail={userEmail}
       onSwitchApp={handleSwitchApp}
       onLoginSuccess={handleLoginSuccess}
       onLogout={handleLogout}
     />);
   }
+  if (userProfile && !canAccessApp(userProfile, 'pos')) {
+    return withShell(<div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 max-w-sm text-center">
+        <h1 className="font-semibold text-slate-900 mb-2">Pharmacy POS access is not enabled</h1>
+        <p className="text-sm text-slate-500 mb-4">Please switch to an app assigned to your account.</p>
+        <button onClick={() => setAppMode(null)} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium">Choose App</button>
+      </div>
+    </div>);
+  }
   return withShell(<POSApp
     userRole={userRole}
+    userProfile={userProfile}
     onSwitchApp={handleSwitchApp}
     onLoginSuccess={handleLoginSuccess}
     onLogout={handleLogout}

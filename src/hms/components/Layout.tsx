@@ -12,20 +12,21 @@ import {
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
 import { TopNavbar } from './TopNavbar';
+import { canAccessApp, roleOrPermission, type UserProfile } from '../../lib/permissions';
 
 const NAV = [
   {
     group: 'Clinical',
     items: [
-      { to: '/',                       icon: LayoutDashboard, label: 'Dashboard',         roles: ['admin','receptionist','doctor'] },
-      { to: '/patients',               icon: Users,           label: 'Patients',           roles: ['admin','receptionist','doctor','nurse'] },
-      { to: '/appointments',           icon: CalendarDays,    label: 'Reception',          roles: ['admin','receptionist'] },
-      { to: '/vitals',                 icon: Activity,        label: 'Vitals Queue',       roles: ['admin','receptionist','doctor','nurse'] },
-      { to: '/token',                  icon: Monitor,         label: 'Token Display',      roles: ['admin','receptionist','doctor','nurse'] },
-      { to: '/opd',                    icon: Stethoscope,     label: 'OPD',                roles: ['admin','doctor'] },
+      { to: '/',                       icon: LayoutDashboard, label: 'Dashboard',         roles: ['admin','receptionist','doctor'], permission: 'hms.dashboard.view' },
+      { to: '/patients',               icon: Users,           label: 'Patients',           roles: ['admin','receptionist','doctor','nurse'], permissions: ['hms.reception.view', 'hms.ipd.view'] },
+      { to: '/appointments',           icon: CalendarDays,    label: 'Reception',          roles: ['admin','receptionist'], permission: 'hms.reception.view' },
+      { to: '/vitals',                 icon: Activity,        label: 'Vitals Queue',       roles: ['admin','receptionist','doctor','nurse'], permission: 'hms.vitals.view' },
+      { to: '/token',                  icon: Monitor,         label: 'Token Display',      roles: ['admin','receptionist','doctor','nurse'], permission: 'hms.token.view' },
+      { to: '/opd',                    icon: Stethoscope,     label: 'OPD',                roles: ['admin','doctor'], permission: 'hms.opd.view' },
       { to: '/prescriptions',          icon: ClipboardList,   label: 'Prescriptions',      roles: ['admin','doctor'] },
       { to: '/prescription-templates', icon: BookOpen,        label: 'Rx Templates',       roles: ['admin','doctor'] },
-      { to: '/ipd',                    icon: BedDouble,       label: 'IPD',                roles: ['admin','receptionist','doctor'] },
+      { to: '/ipd',                    icon: BedDouble,       label: 'IPD',                roles: ['admin','receptionist','doctor'], permission: 'hms.ipd.view' },
     ],
   },
   {
@@ -34,7 +35,7 @@ const NAV = [
       { to: '/lab',       icon: FlaskConical, label: 'Laboratory', roles: ['admin','doctor','lab_technician'] },
       { to: '/pharmacy',  icon: Pill,         label: 'Pharmacy',   roles: ['admin','pharmacist'] },
       { to: '/suppliers', icon: Truck,        label: 'Suppliers',  roles: ['admin','pharmacist'] },
-      { to: '/billing',   icon: Receipt,      label: 'Billing',    roles: ['admin','cashier'] },
+      { to: '/billing',   icon: Receipt,      label: 'Billing',    roles: ['admin','cashier'], permission: 'hms.billing.create' },
     ],
   },
   {
@@ -53,12 +54,13 @@ const NAV = [
 
 interface Props {
   role: string;
+  userProfile?: UserProfile | null;
   userEmail: string;
   onSwitchApp: (mode: 'hms' | 'pos') => void;
   onLogout?: () => void;
 }
 
-export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
+export function Layout({ role, userProfile, userEmail, onSwitchApp, onLogout }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const navigate = useNavigate();
@@ -91,7 +93,7 @@ export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
   const NavGroups = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
     <>
       {NAV.map(({ group, items }) => {
-        const visible = items.filter(i => i.roles.includes(role));
+        const visible = items.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []));
         if (!visible.length) return null;
         return (
           <div key={group}>
@@ -134,7 +136,7 @@ export function Layout({ role, userEmail, onSwitchApp, onLogout }: Props) {
 
   const BottomActions = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
     <div className="space-y-0.5">
-      {(role === 'admin' || role === 'pharmacist' || role === 'cashier') && (
+      {canAccessApp(userProfile || { role }, 'pos') && (
         <button
           onClick={() => {
             onNavigate?.();

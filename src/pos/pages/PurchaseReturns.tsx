@@ -52,7 +52,11 @@ function buildPurchaseReturnSlip(data: any, upb: number) {
   `;
 }
 
-export function PurchaseReturns() {
+interface PurchaseReturnsProps {
+  readOnly?: boolean;
+}
+
+export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
   const [purchases, setPurchases] = useState<any[]>([]);
   const [medicines, setMedicines] = useState<Record<string, number>>({});  // medicineId → current stock
   const [returns, setReturns] = useState<any[]>([]);
@@ -99,6 +103,7 @@ export function PurchaseReturns() {
   };
 
   const openReturn = (purchase: any) => {
+    if (readOnly) return;
     setSelectedPurchase(purchase);
     setReturnBoxes('');
     setReturnLoose('0');
@@ -129,6 +134,7 @@ export function PurchaseReturns() {
   };
 
   const handleSubmit = async () => {
+    if (readOnly) return;
     if (!isValid || !selectedPurchase || submitting) return;
     setSubmitting(true);
     try {
@@ -212,13 +218,13 @@ export function PurchaseReturns() {
                       </span>
                     )}
                   </div>
-                  <button
+                  {!readOnly && <button
                     onClick={() => openReturn(p)}
                     disabled={remaining <= 0}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 text-orange-700 rounded-lg text-xs font-semibold hover:bg-orange-100 border border-orange-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Return
-                  </button>
+                  </button>}
                 </div>
               );
             })}
@@ -269,7 +275,7 @@ export function PurchaseReturns() {
       </div>
 
       {/* Process Return Modal */}
-      {selectedPurchase && (
+      {!readOnly && selectedPurchase && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md my-8">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center">

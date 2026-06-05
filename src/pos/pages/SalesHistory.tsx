@@ -9,6 +9,7 @@ import {
   ArrowUpDown, ArrowUp, ArrowDown, SlidersHorizontal, Edit2, Save,
 } from 'lucide-react';
 import { format, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 type ExportType = 'all' | 'customer' | 'hospital';
 type ViewMode   = 'summary' | 'excel';
@@ -41,7 +42,11 @@ function saleHasCategory(sale: any, category: string) {
   return category === 'all' || (sale.items || []).some((item: any) => getItemCategory(item) === category);
 }
 
-export function SalesHistory() {
+interface SalesHistoryProps {
+  userProfile?: UserProfile | null;
+}
+
+export function SalesHistory({ userProfile }: SalesHistoryProps) {
   const [sales, setSales]               = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [selectedSale, setSelectedSale] = useState<any | null>(null);
@@ -63,6 +68,7 @@ export function SalesHistory() {
   const [exportType,      setExportType]      = useState<ExportType>('all');
   const [exportCategory,  setExportCategory]  = useState('all');
   const [exportDateFrom,  setExportDateFrom]  = useState('');
+  const canEditSales = isAdminProfile(userProfile) || hasPermission(userProfile, 'pos.sales.edit');
   const [exportDateTo,    setExportDateTo]    = useState('');
 
   useEffect(() => {
@@ -179,6 +185,7 @@ export function SalesHistory() {
 
   const handleSaveEdit = async () => {
     if (!editingSale) return;
+    if (!canEditSales) return;
     setEditSaving(true);
     try {
       const { id, ...data } = editingSale;
@@ -519,10 +526,10 @@ export function SalesHistory() {
                       className="flex items-center gap-1 text-blue-600 text-xs font-medium">
                       <Eye className="w-3.5 h-3.5" /> View
                     </button>
-                    <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })}
+                    {canEditSales && <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })}
                       className="flex items-center gap-1 text-orange-600 text-xs font-medium">
                       <Edit2 className="w-3.5 h-3.5" /> Edit
-                    </button>
+                    </button>}
                   </div>
                 </div>
               </div>
@@ -572,9 +579,9 @@ export function SalesHistory() {
                           <button onClick={() => setSelectedSale(sale)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-1 text-sm font-medium">
                             <Eye className="w-4 h-4" /> View
                           </button>
-                          <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })} className="p-1.5 text-orange-600 hover:bg-orange-50 rounded flex items-center gap-1 text-sm font-medium">
+                          {canEditSales && <button onClick={() => setEditingSale({ ...sale, orderDiscountPct: sale.subtotal > 0 ? Math.round((sale.orderDiscount || 0) / sale.subtotal * 100) : 0 })} className="p-1.5 text-orange-600 hover:bg-orange-50 rounded flex items-center gap-1 text-sm font-medium">
                             <Edit2 className="w-4 h-4" /> Edit
-                          </button>
+                          </button>}
                         </div>
                       </td>
                     </tr>
@@ -797,7 +804,7 @@ export function SalesHistory() {
         )}
 
         {/* ── Edit Sale Modal ── */}
-        {editingSale && (
+        {canEditSales && editingSale && (
           <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
             <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-2xl overflow-hidden flex flex-col max-h-[95vh]">
               <div className="p-4 md:p-5 border-b border-gray-100 flex justify-between items-start bg-orange-50 shrink-0">

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth';
 import { db, auth, registerUser, usernameToEmail } from '../../firebase';
 import { nowISO } from '../lib/utils';
@@ -13,6 +13,7 @@ import {
   type PrescriptionPrintSettings,
 } from '../lib/prescriptionPrintSettings';
 import { deleteAllAppData, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
+import { DEFAULT_NON_ADMIN_DISCOUNT_PERCENT, REQUESTED_USER_PASSWORD, REQUESTED_USERS } from '../../lib/permissions';
 
 const ROLES = ['admin','receptionist','doctor','nurse','pharmacist','lab_technician','cashier'];
 type PrintSectionKey = 'name' | 'age' | 'date' | 'clinical' | 'medicines' | 'vitals';
@@ -46,6 +47,9 @@ export function Settings() {
   const [hospital, setHospital] = useState(emptyHospital);
   const [savingHospital, setSavingHospital] = useState(false);
   const [hospitalMsg, setHospitalMsg] = useState('');
+  const [permissionSettings, setPermissionSettings] = useState({ maxNonAdminDiscountPercent: String(DEFAULT_NON_ADMIN_DISCOUNT_PERCENT) });
+  const [savingPermissionSettings, setSavingPermissionSettings] = useState(false);
+  const [permissionSettingsMsg, setPermissionSettingsMsg] = useState('');
 
   // Change Password
   const [currentPass, setCurrentPass] = useState('');
@@ -129,10 +133,19 @@ export function Settings() {
   const [userForm, setUserForm] = useState(emptyUser);
   const [creatingUser, setCreatingUser] = useState(false);
   const [userMsg, setUserMsg] = useState('');
+  const [creatingRequestedUsers, setCreatingRequestedUsers] = useState(false);
+  const [requestedUsersMsg, setRequestedUsersMsg] = useState('');
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'hospital')).then(snap => {
       if (snap.exists()) setHospital({ ...emptyHospital, ...snap.data() });
+    });
+    getDoc(doc(db, 'settings', 'permissions')).then(snap => {
+      if (snap.exists()) {
+        setPermissionSettings({
+          maxNonAdminDiscountPercent: String((snap.data() as any).maxNonAdminDiscountPercent ?? DEFAULT_NON_ADMIN_DISCOUNT_PERCENT),
+        });
+      }
     });
     setGeminiKeyState(getGeminiKey());
     setPrintSettings(getPrescriptionPrintSettings());
@@ -146,6 +159,25 @@ export function Settings() {
       setTimeout(() => setHospitalMsg(''), 3000);
     } catch (e: any) { setHospitalMsg('Error: ' + e.message); }
     finally { setSavingHospital(false); }
+  };
+
+  const savePermissionSettings = async () => {
+    setSavingPermissionSettings(true);
+    setPermissionSettingsMsg('');
+    try {
+      const maxNonAdminDiscountPercent = Math.max(0, Math.min(100, Number(permissionSettings.maxNonAdminDiscountPercent) || 0));
+      await setDoc(doc(db, 'settings', 'permissions'), {
+        maxNonAdminDiscountPercent,
+        updatedAt: nowISO(),
+      }, { merge: true });
+      setPermissionSettings({ maxNonAdminDiscountPercent: String(maxNonAdminDiscountPercent) });
+      setPermissionSettingsMsg('Saved successfully');
+      setTimeout(() => setPermissionSettingsMsg(''), 3000);
+    } catch (e: any) {
+      setPermissionSettingsMsg('Error: ' + e.message);
+    } finally {
+      setSavingPermissionSettings(false);
+    }
   };
 
   const handleExport = async () => {
@@ -221,6 +253,53 @@ export function Settings() {
       setTimeout(() => { setUserMsg(''); setShowUserModal(false); }, 2000);
     } catch (e: any) { setUserMsg('Error: ' + (e.message || 'Could not create user')); }
     finally { setCreatingUser(false); }
+  };
+
+  const handleCreateRequestedUsers = async () => {
+    setCreatingRequestedUsers(true);
+    setRequestedUsersMsg('Creating or updating requested users...');
+    const results: string[] = [];
+    try {
+      for (const requestedUser of REQUESTED_USERS) {
+        const existingSnap = await getDocs(query(collection(db, 'users'), where('username', '==', requestedUser.username)));
+        const userDoc = {
+          name: requestedUser.name,
+          username: requestedUser.username,
+          email: usernameToEmail(requestedUser.username),
+          role: requestedUser.role,
+          app: 'custom',
+          appAccess: requestedUser.appAccess,
+          permissions: requestedUser.permissions,
+          updatedAt: nowISO(),
+        };
+
+        if (!existingSnap.empty) {
+          await setDoc(existingSnap.docs[0].ref, userDoc, { merge: true });
+          results.push(`${requestedUser.name}: permissions updated`);
+          continue;
+        }
+
+        try {
+          const cred = await registerUser(requestedUser.username, REQUESTED_USER_PASSWORD);
+          await setDoc(doc(db, 'users', cred.user.uid), {
+            ...userDoc,
+            createdAt: nowISO(),
+          });
+          results.push(`${requestedUser.name}: created`);
+        } catch (e: any) {
+          if (e?.code === 'auth/email-already-in-use') {
+            results.push(`${requestedUser.name}: auth login already exists, but no user document was found`);
+          } else {
+            throw e;
+          }
+        }
+      }
+      setRequestedUsersMsg(results.join(' | '));
+    } catch (e: any) {
+      setRequestedUsersMsg('Error: ' + (e.message || 'Could not create requested users'));
+    } finally {
+      setCreatingRequestedUsers(false);
+    }
   };
 
   return (
@@ -314,11 +393,46 @@ export function Settings() {
           </button>
         </div>
         <p className="text-sm text-gray-500">Create login accounts for your staff. Each user will sign in with their email and password.</p>
+        <div className="mt-4 rounded-xl border border-violet-100 bg-violet-50 p-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-violet-900">Requested access users</h3>
+              <p className="text-xs text-violet-700 mt-0.5">Creates or updates haseeb, haider, sohail, and danyal with password {REQUESTED_USER_PASSWORD}.</p>
+            </div>
+            <button onClick={handleCreateRequestedUsers} disabled={creatingRequestedUsers}
+              className="flex items-center justify-center gap-2 px-4 py-2 bg-violet-600 text-white rounded-lg text-sm font-medium hover:bg-violet-700 disabled:opacity-60">
+              <UserPlus className="w-4 h-4" /> {creatingRequestedUsers ? 'Working...' : 'Create / Update'}
+            </button>
+          </div>
+          {requestedUsersMsg && <p className={`text-xs mt-3 font-medium ${requestedUsersMsg.startsWith('Error') ? 'text-red-600' : 'text-violet-700'}`}>{requestedUsersMsg}</p>}
+        </div>
         <div className="mt-3 flex flex-wrap gap-2">
           {ROLES.map(r => (
             <span key={r} className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full font-medium capitalize">{r.replace('_',' ')}</span>
           ))}
         </div>
+      </div>
+
+      {/* Permission Settings */}
+      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
+        <div className="flex items-center gap-2 mb-5">
+          <Lock className="w-5 h-5 text-emerald-600" />
+          <h2 className="font-semibold text-gray-900">Permission Settings</h2>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-3 items-end">
+          <F
+            label="Max Non-Admin Discount (%)"
+            type="number"
+            value={permissionSettings.maxNonAdminDiscountPercent}
+            onChange={(v: string) => setPermissionSettings({ maxNonAdminDiscountPercent: v })}
+            placeholder="10"
+          />
+          <button onClick={savePermissionSettings} disabled={savingPermissionSettings}
+            className="px-5 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60">
+            {savingPermissionSettings ? 'Saving...' : 'Save Limit'}
+          </button>
+        </div>
+        {permissionSettingsMsg && <p className={`text-sm mt-3 font-medium ${permissionSettingsMsg.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>{permissionSettingsMsg}</p>}
       </div>
 
       {/* Backup & Restore */}

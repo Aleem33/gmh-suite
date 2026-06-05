@@ -3,8 +3,13 @@ import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'fireb
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { Plus, Edit2, Trash2, Search, X, Phone, MapPin } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
-export function Suppliers() {
+interface SuppliersProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Suppliers({ userProfile }: SuppliersProps) {
   const [suppliers, setSuppliers]   = useState<any[]>([]);
   const [search, setSearch]         = useState('');
   const [isModalOpen, setIsModalOpen]       = useState(false);
@@ -12,6 +17,10 @@ export function Suppliers() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({ name: '', contact: '', address: '' });
+  const isAdmin = isAdminProfile(userProfile);
+  const canCreate = isAdmin || hasPermission(userProfile, 'pos.suppliers.create');
+  const canEdit = isAdmin;
+  const canDelete = isAdmin;
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'suppliers'), snap => {
@@ -27,6 +36,8 @@ export function Suppliers() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (editingId && !canEdit) return;
+    if (!editingId && !canCreate) return;
     try {
       const data = { name: formData.name, contact: formData.contact, address: formData.address };
       if (editingId) {
@@ -42,12 +53,14 @@ export function Suppliers() {
   };
 
   const handleEdit = (supp: any) => {
+    if (!canEdit) return;
     setFormData({ name: supp.name, contact: supp.contact, address: supp.address || '' });
     setEditingId(supp.id); setIsModalOpen(true);
   };
 
   const confirmDelete = async () => {
     if (!confirmDeleteId) return;
+    if (!canDelete) return;
     try { await deleteDoc(doc(db, 'suppliers', confirmDeleteId)); }
     catch (error) { handleFirestoreError(error, OperationType.DELETE, `suppliers/${confirmDeleteId}`); }
     finally { setConfirmDeleteId(null); }
@@ -73,14 +86,14 @@ export function Suppliers() {
       {/* Header */}
       <div className="flex justify-between items-center gap-3">
         <h1 className="text-xl md:text-2xl font-bold text-gray-900">Suppliers</h1>
-        <button
+        {canCreate && <button
           onClick={() => { setEditingId(null); setFormData({ name: '', contact: '', address: '' }); setIsModalOpen(true); }}
           className="bg-blue-600 text-white px-3 py-2 md:px-4 rounded-lg flex items-center gap-2 hover:bg-blue-700 text-sm font-medium shrink-0"
         >
           <Plus className="w-4 h-4" />
           <span className="hidden sm:inline">Add Supplier</span>
           <span className="sm:hidden">Add</span>
-        </button>
+        </button>}
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
@@ -114,14 +127,14 @@ export function Suppliers() {
                     Added: {supp.createdAt ? format(new Date(supp.createdAt), 'MMM dd, yyyy') : 'N/A'}
                   </p>
                 </div>
-                <div className="flex gap-1 shrink-0">
-                  <button onClick={() => handleEdit(supp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
+                {(canEdit || canDelete) && <div className="flex gap-1 shrink-0">
+                  {canEdit && <button onClick={() => handleEdit(supp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
                     <Edit2 className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => setConfirmDeleteId(supp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
+                  </button>}
+                  {canDelete && <button onClick={() => setConfirmDeleteId(supp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
                     <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
+                  </button>}
+                </div>}
               </div>
             </div>
           ))}
@@ -150,8 +163,8 @@ export function Suppliers() {
                   <td className="p-4 text-gray-600">{supp.address || '—'}</td>
                   <td className="p-4 text-gray-600">{supp.createdAt ? format(new Date(supp.createdAt), 'MMM dd, yyyy') : 'N/A'}</td>
                   <td className="p-4 flex justify-end gap-2">
-                    <button onClick={() => handleEdit(supp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>
-                    <button onClick={() => setConfirmDeleteId(supp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>
+                    {canEdit && <button onClick={() => handleEdit(supp)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>}
+                    {canDelete && <button onClick={() => setConfirmDeleteId(supp.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>}
                   </td>
                 </tr>
               ))}

@@ -65,7 +65,8 @@ export function Reports() {
   const totalOpdCollected = bills.reduce((s, b) => s + (b.paid || 0), 0);
   const totalPosRevenue  = posSales.reduce((s, p) => s + (p.total || 0), 0);
   const totalRevenue     = totalOpdRevenue + totalPosRevenue;
-  const totalExpenses    = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const approvedExpenses = expenses.filter(e => (e.status || 'approved') === 'approved');
+  const totalExpenses    = approvedExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
   const netProfit        = totalRevenue - totalExpenses;
   const totalPending     = totalOpdRevenue - totalOpdCollected;
   const completedLab     = labOrders.filter(l => l.status === 'completed').length;
@@ -77,7 +78,7 @@ export function Reports() {
     const dateStr = format(d, 'yyyy-MM-dd');
     const opd     = bills.filter(b => (b.date || '').startsWith(dateStr)).reduce((s, b) => s + (b.total || 0), 0);
     const pos     = posSales.filter(p => (p.date || '').startsWith(dateStr)).reduce((s, p) => s + (p.total || 0), 0);
-    const exp     = expenses.filter(e => (e.date || '').startsWith(dateStr)).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const exp     = approvedExpenses.filter(e => (e.date || '').startsWith(dateStr)).reduce((s, e) => s + (Number(e.amount) || 0), 0);
     return { date: format(d, 'MMM dd'), opd, pos, total: opd + pos, expenses: exp };
   });
 
@@ -88,7 +89,7 @@ export function Reports() {
     const end   = format(endOfMonth(d), 'yyyy-MM-dd');
     const opd   = bills.filter(b => b.date >= start && b.date <= end).reduce((s, b) => s + (b.total || 0), 0);
     const pos   = posSales.filter(p => p.date >= start && p.date <= end).reduce((s, p) => s + (p.total || 0), 0);
-    const exp   = expenses.filter(e => e.date >= start && e.date <= end).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const exp   = approvedExpenses.filter(e => e.date >= start && e.date <= end).reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const revenue = opd + pos;
     return { month: format(d, 'MMM yy'), revenue, expenses: exp, profit: revenue - exp };
   });

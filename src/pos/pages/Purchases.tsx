@@ -4,8 +4,13 @@ import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import { Plus, Search, Truck, PackagePlus, X, ChevronDown, CheckCircle } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
-export function Purchases() {
+interface PurchasesProps {
+  userProfile?: UserProfile | null;
+}
+
+export function Purchases({ userProfile }: PurchasesProps) {
   const [medicines, setMedicines] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [purchases, setPurchases] = useState<any[]>([]);
@@ -21,6 +26,7 @@ export function Purchases() {
     costPrice: '', retailPrice: '', unitPrice: '',
     batchNo: '', expiryDate: '', notes: '',
   });
+  const canCreate = isAdminProfile(userProfile) || userProfile?.role === 'pharmacist' || hasPermission(userProfile, 'pos.purchases.create');
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'medicines'), s => setMedicines(s.docs.map(d => ({ id: d.id, ...d.data() }))),
@@ -72,6 +78,7 @@ export function Purchases() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canCreate) return;
     if (!selectedMedicine) return;
     try {
       const unitsPerBox  = selectedMedicine.unitsPerBox || 1;
@@ -133,12 +140,12 @@ export function Purchases() {
       {/* Header */}
       <div className="flex justify-between items-center gap-3">
         <h1 className="text-xl md:text-2xl font-bold text-gray-900">Purchases</h1>
-        <button onClick={() => setIsModalOpen(true)}
+        {canCreate && <button onClick={() => setIsModalOpen(true)}
           className="bg-blue-600 text-white px-3 py-2 md:px-4 rounded-lg flex items-center gap-2 hover:bg-blue-700 text-sm font-medium shrink-0">
           <PackagePlus className="w-4 h-4" />
           <span className="hidden sm:inline">Record Purchase</span>
           <span className="sm:hidden">Record</span>
-        </button>
+        </button>}
       </div>
 
       {/* List */}

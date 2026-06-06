@@ -23,7 +23,7 @@ import { AuditLogs } from './pages/AuditLogs';
 import { Schedule } from './pages/Schedule';
 import { BedManagement } from './pages/BedManagement';
 import { useAutoNotifications } from './lib/notifications';
-import { canAccessApp, hasAnyPermission, hasPermission, roleOrPermission, type UserProfile } from '../lib/permissions';
+import { canAccessApp, hasAnyPermission, hasPermission, roleOrPermission, WORKFLOW_PERMISSIONS, type UserProfile } from '../lib/permissions';
 import { Billing as PosBilling } from '../pos/pages/Billing';
 import { Medicines as PosMedicines } from '../pos/pages/Medicines';
 import { Purchases as PosPurchases } from '../pos/pages/Purchases';
@@ -60,25 +60,25 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
   const dashboardRoles = ['admin', 'receptionist', 'doctor'];
   const canDashboard = hmsAccess && roleOrPermission(r, dashboardRoles, userProfile, 'hms.dashboard.view');
   const canPatients = hmsAccess && roleOrPermission(r, clinical, userProfile, ['hms.reception.view', 'hms.ipd.view']);
-  const canReception = hmsAccess && roleOrPermission(r, ['admin', 'receptionist'], userProfile, 'hms.reception.view');
-  const canVitals = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.vitals.view');
-  const canToken = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, 'hms.token.view');
+  const canReception = hmsAccess && roleOrPermission(r, ['admin', 'receptionist'], userProfile, WORKFLOW_PERMISSIONS.hmsReception);
+  const canVitals = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, WORKFLOW_PERMISSIONS.hmsVitals);
+  const canToken = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor','nurse'], userProfile, WORKFLOW_PERMISSIONS.hmsToken);
   const canOpd = hmsAccess && roleOrPermission(r, ['admin','doctor'], userProfile, 'hms.opd.view');
-  const canIpd = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor'], userProfile, 'hms.ipd.view');
-  const canBilling = hmsAccess && roleOrPermission(r, ['admin','cashier'], userProfile, 'hms.billing.create');
+  const canIpd = hmsAccess && roleOrPermission(r, ['admin','receptionist','doctor'], userProfile, WORKFLOW_PERMISSIONS.hmsIpd);
+  const canBilling = hmsAccess && roleOrPermission(r, ['admin','cashier'], userProfile, WORKFLOW_PERMISSIONS.hmsBillingCreate);
   const canCreateOnlyBilling = hasPermission(userProfile, 'hms.billing.create') && !['admin', 'cashier'].includes(r);
   const canPharmacyOrders = posAccess && (isAdmin || r === 'pharmacist');
   const canPosDashboard = posAccess && (isAdmin || r === 'pharmacist');
-  const canPosBilling = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, 'pos.billing.create');
-  const canPosMedicines = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.medicines.view');
-  const canPosPurchases = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.purchases.view', 'pos.purchases.create']);
-  const canPosPurchaseReturns = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.purchaseReturns.view');
-  const canPosSales = posAccess && roleOrPermission(r, ['admin', 'cashier', 'pharmacist'], userProfile, 'pos.sales.view');
-  const canPosSaleReturns = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, 'pos.saleReturns.view');
-  const canPosCustomers = posAccess && roleOrPermission(r, ['admin'], userProfile, 'pos.customers.view');
-  const canPosSuppliers = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.suppliers.view', 'pos.suppliers.create']);
-  const canPosExpenses = posAccess && roleOrPermission(r, ['admin'], userProfile, ['pos.expenses.view', 'pos.expenses.create']);
-  const canPosReports = posAccess && roleOrPermission(r, ['admin'], userProfile, 'pos.reports.view');
+  const canPosBilling = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, WORKFLOW_PERMISSIONS.posBillingCreate);
+  const canPosMedicines = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posMedicinesView);
+  const canPosPurchases = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posPurchasesView);
+  const canPosPurchaseReturns = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posPurchaseReturnsView);
+  const canPosSales = posAccess && roleOrPermission(r, ['admin', 'cashier', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posSalesView);
+  const canPosSaleReturns = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, WORKFLOW_PERMISSIONS.posSaleReturnsView);
+  const canPosCustomers = posAccess && roleOrPermission(r, ['admin'], userProfile, WORKFLOW_PERMISSIONS.posCustomersView);
+  const canPosSuppliers = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posSuppliersView);
+  const canPosExpenses = posAccess && roleOrPermission(r, ['admin'], userProfile, WORKFLOW_PERMISSIONS.posExpensesView);
+  const canPosReports = posAccess && roleOrPermission(r, ['admin'], userProfile, WORKFLOW_PERMISSIONS.posReportsView);
   const canPosPatientHistory = posAccess && (isAdmin || r === 'pharmacist' || r === 'cashier');
   const canAnyPharmacy =
     canPharmacyOrders || canPosDashboard || canPosBilling || canPosMedicines || canPosPurchases ||
@@ -125,7 +125,7 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
             {canPosBilling && <Route path="pharmacy/billing" element={<PosBilling userProfile={userProfile} />} />}
             {canPosPatientHistory && <Route path="pharmacy/patient-history" element={<PosPatientHistory />} />}
             {canPosMedicines && <Route path="pharmacy/medicines" element={<PosMedicines userProfile={userProfile} />} />}
-            {canPosPurchases && <Route path="pharmacy/purchases" element={<PosPurchases />} />}
+            {canPosPurchases && <Route path="pharmacy/purchases" element={<PosPurchases userProfile={userProfile} />} />}
             {canPosPurchaseReturns && <Route path="pharmacy/purchase-returns" element={<PosPurchaseReturns readOnly={!hasAnyPermission(userProfile, ['pos.purchaseReturns.create']) && !isAdmin && r !== 'pharmacist'} />} />}
             {canPosSales && <Route path="pharmacy/sales" element={<PosSalesHistory userProfile={userProfile} />} />}
             {canPosSaleReturns && <Route path="pharmacy/sale-returns" element={<PosSalesReturns readOnly={!hasAnyPermission(userProfile, ['pos.saleReturns.create']) && !isAdmin && r !== 'cashier'} />} />}

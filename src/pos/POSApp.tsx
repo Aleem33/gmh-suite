@@ -60,7 +60,7 @@ export function POSApp({ userRole, userProfile, onLoginSuccess, onBack, onLogout
             {canDashboard && <Route index element={<Dashboard />} />}
             {canBilling && <Route path="billing"          element={<Billing userProfile={userProfile} />} />}
             {canMedicines && <Route path="medicines"        element={<Medicines userProfile={userProfile} />} />}
-            {canPurchases && <Route path="purchases"        element={<Purchases />} />}
+            {canPurchases && <Route path="purchases"        element={<Purchases userProfile={userProfile} />} />}
             {canPurchaseReturns && <Route path="purchase-returns" element={<PurchaseReturns readOnly={!hasAnyPermission(userProfile, ['pos.purchaseReturns.create']) && !isAdmin && r !== 'pharmacist'} />} />}
             {canSales && <Route path="sales"           element={<SalesHistory userProfile={userProfile} />} />}
             {canSaleReturns && <Route path="sale-returns"     element={<SalesReturns readOnly={!hasAnyPermission(userProfile, ['pos.saleReturns.create']) && !isAdmin && r !== 'cashier'} />} />}

@@ -90,6 +90,29 @@ export const REQUESTED_USERS = [
   },
 ];
 
+export const WORKFLOW_PERMISSIONS = {
+  hmsReception: ['hms.reception.view'],
+  hmsVitals: ['hms.vitals.view'],
+  hmsToken: ['hms.token.view'],
+  hmsIpd: ['hms.ipd.view'],
+  hmsBillingCreate: ['hms.billing.create'],
+  posBillingCreate: ['pos.billing.create'],
+  posPurchasesCreate: ['pos.purchases.create'],
+  posPurchasesView: ['pos.purchases.view', 'pos.purchases.create'],
+  posPurchaseReturnsView: ['pos.purchaseReturns.view'],
+  posSalesView: ['pos.sales.view'],
+  posSaleReturnsView: ['pos.saleReturns.view'],
+  posMedicinesView: ['pos.medicines.view'],
+  posCustomersView: ['pos.customers.view'],
+  posSuppliersView: ['pos.suppliers.view', 'pos.suppliers.create'],
+  posSuppliersCreate: ['pos.suppliers.create'],
+  posExpensesView: ['pos.expenses.view', 'pos.expenses.create'],
+  posExpensesCreate: ['pos.expenses.create'],
+  posReportsView: ['pos.reports.view'],
+} as const;
+
+export type WorkflowPermissionKey = keyof typeof WORKFLOW_PERMISSIONS;
+
 export function isAdminProfile(profile?: UserProfile | null): boolean {
   return profile?.role === 'admin';
 }
@@ -100,8 +123,12 @@ export function hasPermission(profile: UserProfile | null | undefined, permissio
   return profile.permissions?.[permission] === true;
 }
 
-export function hasAnyPermission(profile: UserProfile | null | undefined, permissions: string[]): boolean {
+export function hasAnyPermission(profile: UserProfile | null | undefined, permissions: readonly string[]): boolean {
   return permissions.some(permission => hasPermission(profile, permission));
+}
+
+export function hasWorkflowPermission(profile: UserProfile | null | undefined, workflow: WorkflowPermissionKey): boolean {
+  return hasAnyPermission(profile, [...WORKFLOW_PERMISSIONS[workflow]]);
 }
 
 export function canAccessApp(profile: UserProfile | null | undefined, app: AppAccess): boolean {
@@ -118,7 +145,7 @@ export function roleOrPermission(
   role: string | null | undefined,
   roles: string[],
   profile: UserProfile | null | undefined,
-  permissions: string | string[] = [],
+  permissions: string | readonly string[] = [],
 ): boolean {
   if (role === 'admin') return true;
   if (role && roles.includes(role)) return true;

@@ -12,7 +12,7 @@ import {
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
 import { TopNavbar } from './TopNavbar';
-import { canAccessApp, roleOrPermission, type UserProfile } from '../../lib/permissions';
+import { canAccessApp, roleOrPermission, WORKFLOW_PERMISSIONS, type UserProfile } from '../../lib/permissions';
 
 const NAV = [
   {
@@ -53,17 +53,17 @@ const NAV = [
 
 const PHARMACY_NAV = [
   { to: '/pharmacy/orders',           icon: Pill,         label: 'Orders / Dispense', roles: ['admin','pharmacist'] },
-  { to: '/pharmacy/billing',          icon: ShoppingCart, label: 'Billing',           roles: ['admin','cashier'], permission: 'pos.billing.create' },
+  { to: '/pharmacy/billing',          icon: ShoppingCart, label: 'Billing',           roles: ['admin','cashier'], permissions: WORKFLOW_PERMISSIONS.posBillingCreate },
   { to: '/pharmacy/patient-history',  icon: ClipboardList,label: 'Patient Rx',        roles: ['admin','pharmacist','cashier'] },
-  { to: '/pharmacy/medicines',        icon: Pill,         label: 'Medicines',         roles: ['admin','pharmacist'], permission: 'pos.medicines.view' },
-  { to: '/pharmacy/purchases',        icon: PackagePlus,  label: 'Purchases',         roles: ['admin','pharmacist'], permissions: ['pos.purchases.view', 'pos.purchases.create'] },
-  { to: '/pharmacy/purchase-returns', icon: RotateCcw,    label: 'Purchase Returns',  roles: ['admin','pharmacist'], permission: 'pos.purchaseReturns.view' },
-  { to: '/pharmacy/sales',            icon: History,      label: 'Sales History',     roles: ['admin','cashier','pharmacist'], permission: 'pos.sales.view' },
-  { to: '/pharmacy/sale-returns',     icon: RotateCcw,    label: 'Sale Returns',      roles: ['admin','cashier'], permission: 'pos.saleReturns.view' },
-  { to: '/pharmacy/customers',        icon: Users,        label: 'Customers',         roles: ['admin'], permission: 'pos.customers.view' },
-  { to: '/pharmacy/suppliers',        icon: Truck,        label: 'Suppliers',         roles: ['admin','pharmacist'], permissions: ['pos.suppliers.view', 'pos.suppliers.create'] },
-  { to: '/pharmacy/expenses',         icon: Receipt,      label: 'Expenses',          roles: ['admin'], permissions: ['pos.expenses.view', 'pos.expenses.create'] },
-  { to: '/pharmacy/reports',          icon: BarChart3,    label: 'Reports',           roles: ['admin'], permission: 'pos.reports.view' },
+  { to: '/pharmacy/medicines',        icon: Pill,         label: 'Medicines',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posMedicinesView },
+  { to: '/pharmacy/purchases',        icon: PackagePlus,  label: 'Purchases',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posPurchasesView },
+  { to: '/pharmacy/purchase-returns', icon: RotateCcw,    label: 'Purchase Returns',  roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posPurchaseReturnsView },
+  { to: '/pharmacy/sales',            icon: History,      label: 'Sales History',     roles: ['admin','cashier','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posSalesView },
+  { to: '/pharmacy/sale-returns',     icon: RotateCcw,    label: 'Sale Returns',      roles: ['admin','cashier'], permissions: WORKFLOW_PERMISSIONS.posSaleReturnsView },
+  { to: '/pharmacy/customers',        icon: Users,        label: 'Customers',         roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posCustomersView },
+  { to: '/pharmacy/suppliers',        icon: Truck,        label: 'Suppliers',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posSuppliersView },
+  { to: '/pharmacy/expenses',         icon: Receipt,      label: 'Expenses',          roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posExpensesView },
+  { to: '/pharmacy/reports',          icon: BarChart3,    label: 'Reports',           roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posReportsView },
   { to: '/pharmacy/users',            icon: UserCog,      label: 'Users',             roles: ['admin'] },
   { to: '/pharmacy/settings',         icon: SettingsIcon, label: 'Settings',          roles: ['admin'] },
 ];

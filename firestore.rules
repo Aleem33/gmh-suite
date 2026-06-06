@@ -29,6 +29,13 @@ service cloud.firestore {
     function isAccountant()   { return isAuth() && userRole() == 'accountant'; }
     function isNurse()        { return isAuth() && userRole() == 'nurse'; }
     function isClinical()     { return isDoctor() || isNurse(); }
+    function canReception()   { return isReceptionist() || hasPerm('hms.reception.view'); }
+    function canVitals()      { return isClinical() || hasPerm('hms.vitals.view'); }
+    function canToken()       { return hasPerm('hms.token.view'); }
+    function canIpd()         { return isClinical() || canReception() || hasPerm('hms.ipd.view'); }
+    function canHmsBilling()  { return isReceptionist() || isAccountant() || isCashier() || hasPerm('hms.billing.create') || canReception() || hasPerm('hms.ipd.view'); }
+    function canPosBilling()  { return isPharmacist() || isCashier() || hasPerm('pos.billing.create'); }
+    function canPosPurchases(){ return isPharmacist() || hasPerm('pos.purchases.create'); }
 
     // ── Users ──────────────────────────────────────────────────────────────────
     match /users/{uid} {
@@ -56,21 +63,22 @@ service cloud.firestore {
     // ── Patients ───────────────────────────────────────────────────────────────
     match /patients/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isReceptionist() || isClinical();
+      allow create, update: if isAdmin() || canReception() || isClinical();
       allow delete: if isAdmin();
     }
 
     // ── Appointments ───────────────────────────────────────────────────────────
     match /appointments/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isReceptionist() || isClinical();
-      allow delete: if isAdmin() || isReceptionist();
+      allow create: if isAdmin() || canReception() || isClinical();
+      allow update: if isAdmin() || canReception() || canVitals() || canToken();
+      allow delete: if isAdmin() || canReception();
     }
 
     // ── Consultations (OPD) ────────────────────────────────────────────────────
     match /consultations/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isClinical() || isReceptionist();
+      allow create, update: if isAdmin() || isClinical() || canReception();
       allow delete: if isAdmin();
     }
 
@@ -91,15 +99,15 @@ service cloud.firestore {
     match /medicines/{doc} {
       allow read: if isAuth();
       allow create: if isAdmin() || isPharmacist();
-      allow update: if isAdmin() || isPharmacist() || hasPerm('pos.billing.create') || hasPerm('pos.purchases.create');
+      allow update: if isAdmin() || canPosBilling() || canPosPurchases() || hasPerm('pos.purchaseReturns.create') || hasPerm('pos.saleReturns.create');
       allow delete: if isAdmin();
     }
 
     // ── Pharmacy Orders ────────────────────────────────────────────────────────
     match /pharmacyOrders/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isClinical() || isReceptionist();
-      allow update: if isAdmin() || isPharmacist() || hasPerm('pos.billing.create');
+      allow create: if isAdmin() || isClinical() || canReception();
+      allow update: if isAdmin() || canPosBilling();
       allow delete: if isAdmin();
     }
 
@@ -112,7 +120,7 @@ service cloud.firestore {
     // ── Lab Orders ─────────────────────────────────────────────────────────────
     match /labOrders/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isClinical() || isReceptionist();
+      allow create: if isAdmin() || isClinical() || canReception();
       allow update: if isAdmin() || isLab() || isClinical();
       allow delete: if isAdmin();
     }
@@ -120,22 +128,25 @@ service cloud.firestore {
     // ── Billing ────────────────────────────────────────────────────────────────
     match /bills/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isReceptionist() || isAccountant() || isCashier() || hasPerm('hms.billing.create');
-      allow update: if isAdmin() || isReceptionist() || isAccountant() || isCashier();
+      allow create: if isAdmin() || canHmsBilling();
+      allow update: if isAdmin() || canHmsBilling();
       allow delete: if isAdmin();
     }
 
     // ── Payments ───────────────────────────────────────────────────────────────
     match /payments/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isReceptionist() || isAccountant() || isCashier();
+      allow create, update: if isAdmin() || canHmsBilling();
       allow delete: if isAdmin();
     }
 
     // ── Expenses ───────────────────────────────────────────────────────────────
     match /expenses/{doc} {
       allow read: if isAdmin() || isAccountant() || isReceptionist() || hasPerm('pos.expenses.view') || hasPerm('pos.expenses.create');
-      allow create: if isAdmin() || isAccountant() || hasPerm('pos.expenses.create');
+      allow create: if isAdmin() || isAccountant()
+        || (hasPerm('pos.expenses.create')
+          && request.resource.data.status == 'pending'
+          && request.resource.data.createdBy == request.auth.uid);
       allow update: if isAdmin() || isAccountant();
       allow delete: if isAdmin();
     }
@@ -151,28 +162,32 @@ service cloud.firestore {
     // ── IPD ────────────────────────────────────────────────────────────────────
     match /admissions/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isClinical() || isReceptionist();
+      allow create, update: if isAdmin() || canIpd();
       allow delete: if isAdmin();
     }
 
     match /wards/{doc} {
       allow read: if isAuth();
-      allow write: if isAdmin() || isClinical() || isReceptionist();
+      allow create, update: if isAdmin() || isClinical() || isReceptionist();
+      allow delete: if isAdmin();
     }
 
     match /rooms/{doc} {
       allow read: if isAuth();
-      allow write: if isAdmin() || isClinical() || isReceptionist();
+      allow create, update: if isAdmin() || isClinical() || isReceptionist();
+      allow delete: if isAdmin();
     }
 
     match /beds/{doc} {
       allow read: if isAuth();
-      allow write: if isAdmin() || isClinical() || isReceptionist();
+      allow create: if isAdmin() || isClinical() || isReceptionist();
+      allow update: if isAdmin() || canIpd();
+      allow delete: if isAdmin();
     }
 
     match /bedTreatments/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isClinical() || isReceptionist();
+      allow create, update: if isAdmin() || canIpd();
       allow delete: if isAdmin();
     }
 
@@ -212,8 +227,8 @@ service cloud.firestore {
 
     match /sales/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isPharmacist() || isCashier() || hasPerm('pos.billing.create');
-      allow update: if isAdmin() || isPharmacist() || isCashier();
+      allow create: if isAdmin() || canPosBilling();
+      allow update: if isAdmin() || isPharmacist() || isCashier() || hasPerm('pos.sales.edit');
       allow delete: if isAdmin();
     }
 
@@ -225,20 +240,20 @@ service cloud.firestore {
 
     match /purchases/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isPharmacist() || hasPerm('pos.purchases.create');
+      allow create: if isAdmin() || canPosPurchases();
       allow update: if isAdmin() || isPharmacist();
       allow delete: if isAdmin();
     }
 
     match /purchaseReturns/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isPharmacist();
+      allow create, update: if isAdmin() || isPharmacist() || hasPerm('pos.purchaseReturns.create');
       allow delete: if isAdmin();
     }
 
     match /saleReturns/{doc} {
       allow read: if isAuth();
-      allow create, update: if isAdmin() || isCashier();
+      allow create, update: if isAdmin() || isCashier() || hasPerm('pos.saleReturns.create');
       allow delete: if isAdmin();
     }
 
@@ -251,13 +266,17 @@ service cloud.firestore {
 
     match /customerPayments/{doc} {
       allow read: if isAdmin() || isCashier() || hasPerm('pos.customers.view');
-      allow create, update: if isAdmin() || isCashier();
+      allow create, update: if isAdmin() || isCashier() || hasPerm('pos.customers.payments');
       allow delete: if isAdmin();
     }
 
     match /posExpenses/{doc} {
-      allow read: if isAdmin() || isAccountant() || isPharmacist();
-      allow create, update: if isAdmin() || isPharmacist();
+      allow read: if isAdmin() || isAccountant() || isPharmacist() || hasPerm('pos.expenses.view') || hasPerm('pos.expenses.create');
+      allow create: if isAdmin() || isPharmacist()
+        || (hasPerm('pos.expenses.create')
+          && request.resource.data.status == 'pending'
+          && request.resource.data.createdBy == request.auth.uid);
+      allow update: if isAdmin() || isPharmacist();
       allow delete: if isAdmin();
     }
 

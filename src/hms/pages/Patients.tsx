@@ -24,10 +24,11 @@ export function Patients() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [viewPatient, setViewPatient] = useState<any | null>(null);
-  const [historyTab, setHistoryTab] = useState<'info' | 'opd' | 'ipd' | 'lab' | 'bills'>('info');
+  const [historyTab, setHistoryTab] = useState<'info' | 'opd' | 'vitals' | 'ipd' | 'lab' | 'bills'>('info');
 
   // Patient history data
   const [histConsults, setHistConsults] = useState<any[]>([]);
+  const [histVitals, setHistVitals] = useState<any[]>([]);
   const [histAdmissions, setHistAdmissions] = useState<any[]>([]);
   const [histLab, setHistLab] = useState<any[]>([]);
   const [histBills, setHistBills] = useState<any[]>([]);
@@ -42,7 +43,7 @@ export function Patients() {
   // Load history when a patient is opened
   useEffect(() => {
     if (!viewPatient) {
-      setHistConsults([]); setHistAdmissions([]); setHistLab([]); setHistBills([]);
+      setHistConsults([]); setHistVitals([]); setHistAdmissions([]); setHistLab([]); setHistBills([]);
       return;
     }
     const pid = viewPatient.id;
@@ -52,13 +53,18 @@ export function Patients() {
     const u2 = onSnapshot(collection(db, 'admissions'), s =>
       setHistAdmissions(s.docs.map(d => ({ id: d.id, ...d.data() })).filter((c: any) => c.patientId === pid).sort((a: any, b: any) => b.admissionDate > a.admissionDate ? 1 : -1))
     );
-    const u3 = onSnapshot(collection(db, 'labOrders'), s =>
+    const u3 = onSnapshot(collection(db, 'appointments'), s =>
+      setHistVitals(s.docs.map(d => ({ id: d.id, ...d.data() })).filter((a: any) =>
+        a.patientId === pid && a.vitals && Object.values(a.vitals).some(Boolean)
+      ).sort((a: any, b: any) => (b.vitalsSubmittedAt || b.checkedInAt || b.createdAt || '') > (a.vitalsSubmittedAt || a.checkedInAt || a.createdAt || '') ? 1 : -1))
+    );
+    const u4 = onSnapshot(collection(db, 'labOrders'), s =>
       setHistLab(s.docs.map(d => ({ id: d.id, ...d.data() })).filter((c: any) => c.patientId === pid).sort((a: any, b: any) => b.createdAt > a.createdAt ? 1 : -1))
     );
-    const u4 = onSnapshot(collection(db, 'bills'), s =>
+    const u5 = onSnapshot(collection(db, 'bills'), s =>
       setHistBills(s.docs.map(d => ({ id: d.id, ...d.data() })).filter((c: any) => c.patientId === pid).sort((a: any, b: any) => b.createdAt > a.createdAt ? 1 : -1))
     );
-    return () => { u1(); u2(); u3(); u4(); };
+    return () => { u1(); u2(); u3(); u4(); u5(); };
   }, [viewPatient]);
 
   const filtered = patients.filter(p =>
@@ -261,6 +267,7 @@ export function Patients() {
               {([
                 { key: 'info',  label: 'Info',       icon: User,         count: null },
                 { key: 'opd',   label: 'OPD',        icon: FileText,     count: histConsults.length },
+                { key: 'vitals',label: 'Vitals',     icon: History,      count: histVitals.length },
                 { key: 'ipd',   label: 'IPD',        icon: BedDouble,    count: histAdmissions.length },
                 { key: 'lab',   label: 'Lab',        icon: FlaskConical, count: histLab.length },
                 { key: 'bills', label: 'Bills',      icon: Receipt,      count: histBills.length },
@@ -303,9 +310,10 @@ export function Patients() {
                       </div>
                     ))}
                   </div>
-                  <div className="grid grid-cols-4 gap-3 pt-2 border-t border-gray-100">
+                  <div className="grid grid-cols-5 gap-3 pt-2 border-t border-gray-100">
                     {[
                       { label: 'OPD Visits',    value: histConsults.length,  color: 'text-blue-600' },
+                      { label: 'Vitals',        value: histVitals.length,    color: 'text-emerald-600' },
                       { label: 'IPD Admissions',value: histAdmissions.length, color: 'text-purple-600' },
                       { label: 'Lab Orders',    value: histLab.length,       color: 'text-orange-600' },
                       { label: 'Total Bills',   value: formatCurrency(histBills.reduce((s, b) => s + (b.total || 0), 0)), color: 'text-green-600' },
@@ -342,6 +350,48 @@ export function Patients() {
                         <div className="mt-2 text-xs text-gray-400">Dr. {c.doctorName || '—'} · Fee: Rs. {c.fee}</div>
                       </div>
                     ))
+                  }
+                </div>
+              )}
+
+              {/* VITALS TAB */}
+              {historyTab === 'vitals' && (
+                <div className="space-y-3">
+                  {histVitals.length === 0
+                    ? <p className="text-center text-gray-400 py-10 text-sm">No vitals records found</p>
+                    : histVitals.map(a => {
+                      const v = a.vitals || {};
+                      return (
+                        <div key={a.id} className="border border-gray-100 rounded-xl p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div>
+                              <span className="text-sm font-semibold text-gray-800">{formatDate(a.date)}</span>
+                              <span className="text-xs text-gray-400 ml-2">{a.time || ''}</span>
+                            </div>
+                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${a.type === 'Vitals' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'}`}>
+                              {a.type || 'OPD'}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-5 gap-2 text-sm">
+                            {[
+                              ['BP', v.bp || '-'],
+                              ['Temp', v.temperature || '-'],
+                              ['Weight', v.weight || '-'],
+                              ['Pulse', v.pulse || '-'],
+                              ['SpO2', v.spo2 || '-'],
+                            ].map(([label, value]) => (
+                              <div key={label} className="bg-gray-50 rounded-lg p-2">
+                                <div className="text-xs text-gray-400">{label}</div>
+                                <div className="font-medium text-gray-800">{value}</div>
+                              </div>
+                            ))}
+                          </div>
+                          {v.complaint && <p className="text-xs text-gray-500 mt-3"><span className="text-gray-400">Reason: </span>{v.complaint}</p>}
+                          {v.notes && <p className="text-xs text-gray-500 mt-1"><span className="text-gray-400">Notes: </span>{v.notes}</p>}
+                          <div className="text-xs text-gray-400 mt-2">Recorded by {a.vitalsSubmittedBy || 'staff'}</div>
+                        </div>
+                      );
+                    })
                   }
                 </div>
               )}

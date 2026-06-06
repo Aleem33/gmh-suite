@@ -69,17 +69,19 @@ export function VitalsQueue() {
     setMessage('');
     try {
       const vitals = { ...form };
+      const completedVitalsOnly = selected.type === 'Vitals';
+      const nextStatus = completedVitalsOnly ? 'completed' : 'vitals_done';
       await updateDoc(doc(db, 'appointments', selected.id), {
         vitals,
-        status: 'vitals_done',
+        status: nextStatus,
         vitalsSubmittedAt: nowISO(),
         vitalsSubmittedBy: auth.currentUser?.email || '',
         updatedAt: nowISO(),
       });
       await logAudit('update', 'appointment', selected.id, `Vitals submitted for ${selected.patientName}`);
-      const updated = { ...selected, vitals, status: 'vitals_done' };
+      const updated = { ...selected, vitals, status: nextStatus };
       setSelected(updated);
-      setMessage('Vitals saved. Patient is ready for doctor.');
+      setMessage(completedVitalsOnly ? 'Vitals saved. Visit completed.' : 'Vitals saved. Patient is ready for doctor.');
       if (printAfter) printVitalsOnPrescriptionPad({ ...updated, vitals, date: formatDate(updated.date) });
     } catch (e: any) {
       setMessage(e.message || 'Could not save vitals.');

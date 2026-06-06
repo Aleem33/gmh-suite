@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Plus, Search, X, XCircle, Clock, CalendarDays,
   ChevronLeft, ChevronRight, LayoutList, UserPlus, User, Stethoscope,
+  BedDouble,
 } from 'lucide-react';
 import {
   format, startOfMonth, endOfMonth, eachDayOfInterval, getDay,
@@ -15,8 +16,9 @@ import {
 import { cn } from '../lib/utils';
 
 const DEPARTMENTS = ['General Medicine','Surgery','Gynecology','Pediatrics','ENT','Orthopedics','Dermatology','Cardiology','Neurology','Ophthalmology','Dentistry','Radiology'];
-const TYPES = ['OPD','Follow-up','Emergency','Procedure'];
+const TYPES = ['OPD','Follow-up','Emergency','Procedure','Vitals','IPD'];
 const BLOOD_GROUPS = ['A+','A-','B+','B-','AB+','AB-','O+','O-','Unknown'];
+const emptyAdmissionForm = { doctorId: '', doctorName: '', wardId: '', wardName: '', bedId: '', bedNo: '', dailyRate: '2000', diagnosis: '', notes: '', referredBy: 'Reception' };
 
 function StatusBadge({ s }: { s: string }) {
   const map: Record<string,string> = {
@@ -59,6 +61,9 @@ export function Appointments() {
   const [appointments, setAppointments] = useState<any[]>([]);
   const [patients, setPatients] = useState<any[]>([]);
   const [staff, setStaff] = useState<any[]>([]);
+  const [wards, setWards] = useState<any[]>([]);
+  const [beds, setBeds] = useState<any[]>([]);
+  const [admissions, setAdmissions] = useState<any[]>([]);
   const [consultationFee, setConsultationFee] = useState('500');
   const [view, setView] = useState<'list' | 'calendar'>('list');
   const [tab, setTab] = useState<'today' | 'all'>('today');
@@ -86,8 +91,7 @@ export function Appointments() {
     doctorId: '', doctorName: '', department: 'General Medicine',
     date: today(), time: '09:00', type: 'OPD', fee: consultationFee, paidAmount: consultationFee, paymentMethod: 'Cash', notes: '',
   });
-
-  const [vitals, setVitals] = useState({ bp: '', temperature: '', weight: '', pulse: '', spo2: '' });
+  const [admissionForm, setAdmissionForm] = useState(emptyAdmissionForm);
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'appointments'), snap =>
@@ -99,6 +103,9 @@ export function Appointments() {
       const doctors = snap.docs.filter(d => d.data().role === 'doctor').map(d => ({ id: d.id, ...d.data() }));
       setStaff(doctors as any[]);
     });
+    const u4 = onSnapshot(collection(db, 'wards'), snap => setWards(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const u5 = onSnapshot(collection(db, 'beds'), snap => setBeds(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    const u6 = onSnapshot(collection(db, 'admissions'), snap => setAdmissions(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     getDoc(doc(db, 'settings', 'hospital')).then(snap => {
       if (snap.exists() && snap.data().consultationFee) {
         setConsultationFee(String(snap.data().consultationFee));
@@ -119,7 +126,7 @@ export function Appointments() {
         }
       }
     });
-    return () => { u1(); u2(); u3(); };
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
   }, []);
 
   // Doctors only see their own appointments
@@ -139,6 +146,12 @@ export function Appointments() {
   ).slice(0, 6);
 
   const selectPatient = (p: any) => { setSelectedPatient(p); setPatientSearch(''); };
+  const occupiedBedIds = admissions.filter(a => a.status === 'admitted').map(a => a.bedId).filter(Boolean);
+  const availableBeds = beds.filter(b => !occupiedBedIds.includes(b.id));
+  const wardBeds = admissionForm.wardId ? availableBeds.filter(b => b.wardId === admissionForm.wardId) : availableBeds;
+  const isIpdCheckIn = apptForm.type === 'IPD';
+  const isVitalsOnlyCheckIn = apptForm.type === 'Vitals';
+  const isOpdLikeCheckIn = !isIpdCheckIn && !isVitalsOnlyCheckIn;
 
   const openAdd = () => {
     setSelectedPatient(null);
@@ -146,25 +159,35 @@ export function Appointments() {
     setPatientMode('search');
     setNewPt({ name: '', age: '', gender: 'Male', phone: '', address: '', bloodGroup: 'Unknown', allergies: '' });
     setApptForm({ doctorId: '', doctorName: '', department: 'General Medicine', date: today(), time: '09:00', type: 'OPD', fee: consultationFee, paidAmount: consultationFee, paymentMethod: 'Cash', notes: '' });
+    setAdmissionForm(emptyAdmissionForm);
     setError('');
     setShowModal(true);
   };
 
   const af = (k: string, v: string) => setApptForm(p => ({ ...p, [k]: v }));
+  const ipdf = (k: string, v: string) => setAdmissionForm(p => ({ ...p, [k]: v }));
 
   const handleSave = async () => {
     // Validate patient
     if (!selectedPatient && patientMode === 'search') { setError('Select a patient or click "New Patient".'); return; }
     if (patientMode === 'new' && !newPt.name.trim()) { setError('Patient name is required.'); return; }
-    if (!apptForm.date || !apptForm.time) { setError('Date and time are required.'); return; }
+    if (isIpdCheckIn && !admissionForm.wardId) { setError('Ward is required for direct IPD admission.'); return; }
+    if (isIpdCheckIn && admissionForm.bedId) {
+      const bedTaken = admissions.find(a => a.status === 'admitted' && a.bedId === admissionForm.bedId);
+      if (bedTaken) { setError('This bed is already occupied.'); return; }
+    }
+
+    const checkedInAt = new Date();
+    const checkInDate = format(checkedInAt, 'yyyy-MM-dd');
+    const checkInTime = format(checkedInAt, 'HH:mm');
 
     // Conflict detection
-    if (apptForm.doctorId) {
+    if (isOpdLikeCheckIn && apptForm.doctorId) {
       const conflict = visibleAppointments.find(a =>
-        a.doctorId === apptForm.doctorId && a.date === apptForm.date &&
-        a.time === apptForm.time && !['cancelled', 'no-show', 'completed'].includes(a.status)
+        a.doctorId === apptForm.doctorId && a.date === checkInDate &&
+        a.time === checkInTime && !['cancelled', 'no-show', 'completed'].includes(a.status)
       );
-      if (conflict) { setError(`⚠ Dr. ${apptForm.doctorName} already has an appointment at ${apptForm.time} on this date.`); return; }
+      if (conflict) { setError(`Dr. ${apptForm.doctorName} already has an appointment at ${checkInTime} today.`); return; }
     }
 
     setSaving(true); setError('');
@@ -184,23 +207,40 @@ export function Appointments() {
         patientAge = newPt.age; patientGender = newPt.gender;
       }
 
-      const tokenNo = appointments.filter(a => a.date === apptForm.date).length + 1;
-      const fee = Number(apptForm.fee) || 0;
+      if (isIpdCheckIn) {
+        const ref = await addDoc(collection(db, 'admissions'), {
+          patientId, patientName, patientMRN, patientAge, patientGender,
+          ...admissionForm,
+          dailyRate: Number(admissionForm.dailyRate) || 0,
+          admissionDate: checkInDate,
+          status: 'admitted',
+          source: 'reception',
+          checkedInAt: nowISO(),
+          createdAt: nowISO(),
+        });
+        if (admissionForm.bedId) await updateDoc(doc(db, 'beds', admissionForm.bedId), { status: 'occupied', updatedAt: nowISO() });
+        await logAudit('create', 'admission', ref.id, `${patientName} direct IPD via reception`);
+        setShowModal(false);
+        return;
+      }
+
+      const tokenNo = appointments.filter(a => a.date === checkInDate).length + 1;
+      const fee = isVitalsOnlyCheckIn ? 0 : Number(apptForm.fee) || 0;
       const paid = Math.min(Number(apptForm.paidAmount) || 0, fee);
       const balance = Math.max(0, fee - paid);
       const paymentStatus = paid >= fee ? 'paid' : paid > 0 ? 'partial' : 'pending';
 
       const apptRef = await addDoc(collection(db, 'appointments'), {
-        ...apptForm, fee, paidAmount: paid, tokenNo,
+        ...apptForm, date: checkInDate, time: checkInTime, fee, paidAmount: paid, tokenNo,
         patientId, patientName, patientMRN, patientAge, patientGender,
-        vitals, status: 'vitals_pending', checkedInAt: nowISO(), createdAt: nowISO(),
+        vitals: {}, status: 'vitals_pending', checkedInAt: nowISO(), createdAt: nowISO(),
       });
-      if (fee > 0) {
+      if (isOpdLikeCheckIn && fee > 0) {
         const billNo = await getNextBillNo();
         const billRef = await addDoc(collection(db, 'bills'), {
           billNo,
           patientId, patientName, patientMRN,
-          date: apptForm.date,
+          date: checkInDate,
           items: [{ description: `OPD Consultation - ${apptForm.department}`, category: 'Consultation', quantity: 1, rate: fee, amount: fee }],
           subtotal: fee, discount: 0, total: fee,
           paid, balance, paymentStatus, paymentMethod: apptForm.paymentMethod,
@@ -212,7 +252,7 @@ export function Appointments() {
         await updateDoc(doc(db, 'appointments', apptRef.id), { billId: billRef.id, billNo, updatedAt: nowISO() });
         await logAudit('create', 'bill', billRef.id, `${billNo} - ${patientName} - Rs.${fee} (Reception OPD)`);
       }
-      await logAudit('create', 'appointment', apptRef.id, `${patientName} — ${apptForm.date} ${apptForm.time}`);
+      await logAudit('create', 'appointment', apptRef.id, `${patientName} - ${apptForm.type} - ${checkInDate} ${checkInTime}`);
 
       setShowModal(false);
     } catch (e: any) { setError(e.message); }
@@ -340,7 +380,7 @@ export function Appointments() {
                     <td className="px-4 py-3"><StatusBadge s={a.status} /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        {['vitals_done', 'in_consultation'].includes(a.status) && (
+                        {a.type !== 'Vitals' && ['vitals_done', 'in_consultation'].includes(a.status) && (
                           <button onClick={() => sendToOPD(a)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg" title="Open OPD"><Stethoscope className="w-4 h-4" /></button>
                         )}
                         {['scheduled', 'vitals_pending', 'vitals_done', 'in_consultation'].includes(a.status) && (
@@ -404,7 +444,7 @@ export function Appointments() {
                   </div>
                   {['scheduled', 'vitals_pending', 'vitals_done', 'in_consultation'].includes(a.status) && (
                     <div className="flex gap-1.5 mt-2">
-                      {['vitals_done', 'in_consultation'].includes(a.status) && (
+                      {a.type !== 'Vitals' && ['vitals_done', 'in_consultation'].includes(a.status) && (
                         <button onClick={() => sendToOPD(a)} className="flex-1 text-xs bg-blue-50 text-blue-700 py-1 rounded-lg hover:bg-blue-100 font-medium">OPD</button>
                       )}
                       <button onClick={() => updateStatus(a.id, 'cancelled')} className="flex-1 text-xs bg-red-50 text-red-700 py-1 rounded-lg hover:bg-red-100 font-medium">Cancel</button>
@@ -520,34 +560,11 @@ export function Appointments() {
                 )}
               </div>
 
-              {/* ── VITALS ── */}
-              <div>
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Vitals</p>
-                <div className="grid grid-cols-5 gap-2">
-                  {[['BP','bp','120/80'],['Temp °F','temperature','98.6'],['Weight kg','weight','70'],['Pulse','pulse','72'],['SpO2 %','spo2','99']].map(([label, key, placeholder]) => (
-                    <div key={key}>
-                      <label className="block text-xs font-medium text-gray-500 mb-1">{label}</label>
-                      <input value={(vitals as any)[key]} onChange={e => setVitals(v => ({ ...v, [key]: e.target.value }))} placeholder={placeholder}
-                        className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
               {/* ── APPOINTMENT DETAILS ── */}
               <div>
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Appointment Details</p>
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Check-In Details</p>
+                <div className="bg-gray-50 border border-gray-100 rounded-xl px-4 py-2.5 text-xs text-gray-600 mb-4">Date and time will be recorded automatically when you save this check-in.</div>
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Date *</label>
-                    <input type="date" value={apptForm.date} onChange={e => af('date', e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-gray-600 mb-1">Time *</label>
-                    <input type="time" value={apptForm.time} onChange={e => af('time', e.target.value)}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Department</label>
                     <select value={apptForm.department} onChange={e => af('department', e.target.value)}
@@ -555,14 +572,14 @@ export function Appointments() {
                       {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
                     </select>
                   </div>
-                  <div>
+                  {isOpdLikeCheckIn && <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Doctor</label>
                     <select value={apptForm.doctorId} onChange={e => { const d = staff.find(s => s.id === e.target.value); setApptForm(f => ({ ...f, doctorId: d?.id || '', doctorName: d?.name || '' })); }}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                       <option value="">— Select Doctor —</option>
                       {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                     </select>
-                  </div>
+                  </div>}
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Type</label>
                     <select value={apptForm.type} onChange={e => af('type', e.target.value)}
@@ -570,23 +587,23 @@ export function Appointments() {
                       {TYPES.map(t => <option key={t}>{t}</option>)}
                     </select>
                   </div>
-                  <div>
+                  {isOpdLikeCheckIn && <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Consultation Fee (Rs.)</label>
                     <input type="number" value={apptForm.fee} onChange={e => af('fee', e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                  <div>
+                  </div>}
+                  {isOpdLikeCheckIn && <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Amount Received (Rs.)</label>
                     <input type="number" value={apptForm.paidAmount} onChange={e => af('paidAmount', e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
-                  </div>
-                  <div>
+                  </div>}
+                  {isOpdLikeCheckIn && <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Payment Method</label>
                     <select value={apptForm.paymentMethod} onChange={e => af('paymentMethod', e.target.value)}
                       className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                       {['Cash','Card','Online Transfer','Cheque','Free'].map(m => <option key={m}>{m}</option>)}
                     </select>
-                  </div>
+                  </div>}
                   <div className="col-span-2">
                     <label className="block text-xs font-medium text-gray-600 mb-1">Notes</label>
                     <textarea value={apptForm.notes} onChange={e => af('notes', e.target.value)} rows={2}
@@ -595,14 +612,57 @@ export function Appointments() {
                 </div>
               </div>
 
+              {isIpdCheckIn && (
+                <div>
+                  <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2 flex items-center gap-1.5"><BedDouble className="w-3.5 h-3.5" /> Direct IPD Admission</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Ward *</label>
+                      <select value={admissionForm.wardId} onChange={e => { const w = wards.find(w => w.id === e.target.value); setAdmissionForm(p => ({ ...p, wardId: w?.id || '', wardName: w?.name || '', bedId: '', bedNo: '' })); }}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Select Ward</option>
+                        {wards.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Bed</label>
+                      <select value={admissionForm.bedId} onChange={e => { const b = beds.find(b => b.id === e.target.value); setAdmissionForm(p => ({ ...p, bedId: b?.id || '', bedNo: b?.bedNo || '', dailyRate: String(b?.dailyRate || '2000') })); }}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Select Bed</option>
+                        {wardBeds.map(b => <option key={b.id} value={b.id}>Bed {b.bedNo} ({b.type})</option>)}
+                      </select>
+                      {admissionForm.wardId && wardBeds.length === 0 && <p className="text-xs text-red-500 mt-1">No available beds in this ward</p>}
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Doctor</label>
+                      <select value={admissionForm.doctorId} onChange={e => { const d = staff.find(s => s.id === e.target.value); setAdmissionForm(p => ({ ...p, doctorId: d?.id || '', doctorName: d?.name || '' })); }}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Select Doctor</option>
+                        {staff.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Daily Rate (Rs.)</label>
+                      <input type="number" value={admissionForm.dailyRate} onChange={e => ipdf('dailyRate', e.target.value)}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-gray-600 mb-1">Admission Diagnosis</label>
+                      <textarea value={admissionForm.diagnosis} onChange={e => ipdf('diagnosis', e.target.value)} rows={2}
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5 text-xs text-blue-700">
-                ✓ A bill will be generated when the doctor completes the OPD consultation.
+                {isIpdCheckIn ? 'Patient will be admitted directly to IPD and will not go to OPD.' : isVitalsOnlyCheckIn ? 'Patient will go only to Vitals Queue and will be completed after vitals are saved.' : 'A bill will be generated for the OPD check-in as usual.'}
               </div>
             </div>
             <div className="flex gap-3 px-5 pb-5">
               <button onClick={() => setShowModal(false)} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50">Cancel</button>
               <button onClick={handleSave} disabled={saving} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm hover:bg-blue-700 disabled:opacity-60">
-                {saving ? 'Saving...' : 'Check In & Create Bill'}
+                {saving ? 'Saving...' : isIpdCheckIn ? 'Admit to IPD' : isVitalsOnlyCheckIn ? 'Send to Vitals' : 'Check In & Create Bill'}
               </button>
             </div>
           </div>

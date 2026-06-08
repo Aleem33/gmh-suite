@@ -36,6 +36,7 @@ service cloud.firestore {
     function canHmsBilling()  { return isReceptionist() || isAccountant() || isCashier() || hasPerm('hms.billing.create') || canReception() || hasPerm('hms.ipd.view'); }
     function canPosBilling()  { return isPharmacist() || isCashier() || hasPerm('pos.billing.create'); }
     function canPosPurchases(){ return isPharmacist() || hasPerm('pos.purchases.create'); }
+    function canPosMedicineCreate(){ return isPharmacist() || hasPerm('pos.medicines.create') || userDoc().username == 'haseeb'; }
 
     // ── Users ──────────────────────────────────────────────────────────────────
     match /users/{uid} {
@@ -98,7 +99,7 @@ service cloud.firestore {
     // ── Medicines ──────────────────────────────────────────────────────────────
     match /medicines/{doc} {
       allow read: if isAuth();
-      allow create: if isAdmin() || isPharmacist();
+      allow create: if isAdmin() || canPosMedicineCreate();
       allow update: if isAdmin() || canPosBilling() || canPosPurchases() || hasPerm('pos.purchaseReturns.create') || hasPerm('pos.saleReturns.create');
       allow delete: if isAdmin();
     }

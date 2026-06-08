@@ -6,7 +6,7 @@ import { formatCurrency } from '../lib/utils';
 import { Plus, Edit2, Trash2, Search, AlertCircle, Upload, Download, X } from 'lucide-react';
 import { format, isBefore, addDays } from 'date-fns';
 import Papa from 'papaparse';
-import { isAdminProfile, type UserProfile } from '../../lib/permissions';
+import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 const ITEM_CATEGORIES = ['Medicine', 'Cold Drinks', 'Snacks', 'Grocery', 'Personal Care', 'Other'];
 
@@ -31,8 +31,11 @@ export function Medicines({ userProfile }: MedicinesProps) {
     stockBoxes: '0', stockLoose: '0',
     expiryDate: '', batchNo: '',
   });
-  const canManage = isAdminProfile(userProfile) || userProfile?.role === 'pharmacist';
-  const canDelete = isAdminProfile(userProfile);
+  const isAdmin = isAdminProfile(userProfile);
+  const isPharmacist = userProfile?.role === 'pharmacist';
+  const canCreate = isAdmin || isPharmacist || hasPermission(userProfile, 'pos.medicines.create') || userProfile?.username === 'haseeb';
+  const canEdit = isAdmin || isPharmacist;
+  const canDelete = isAdmin;
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'medicines'), snap => {
@@ -60,7 +63,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!canManage) return;
+    if (editingId ? !canEdit : !canCreate) return;
     try {
       const totalStock = (parseInt(formData.stockBoxes || '0') * parseInt(formData.unitsPerBox || '1')) + parseInt(formData.stockLoose || '0');
       const data = {
@@ -83,7 +86,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
   };
 
   const handleEdit = (med: any) => {
-    if (!canManage) return;
+    if (!canEdit) return;
     const unitsPerBox = med.unitsPerBox || 1;
     setFormData({
       name: med.name, category: med.category || 'Medicine', form: med.form || 'Tablet',
@@ -120,6 +123,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!canCreate) return;
     setIsUploading(true); setCsvError(null);
     Papa.parse(file, {
       header: true, skipEmptyLines: true,
@@ -195,7 +199,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
       {/* Header */}
       <div className="flex justify-between items-center gap-2">
         <h1 className="text-xl md:text-2xl font-bold text-gray-900">Medicines</h1>
-        {canManage && <div className="flex gap-2">
+        {canCreate && <div className="flex gap-2">
           <button onClick={() => setIsCsvModalOpen(true)}
             className="bg-white text-gray-700 border border-gray-300 px-3 py-2 rounded-lg flex items-center gap-1.5 hover:bg-gray-50 text-sm font-medium">
             <Upload className="w-4 h-4" />
@@ -243,10 +247,10 @@ export function Medicines({ userProfile }: MedicinesProps) {
                     {med.form}{med.unitsPerBox > 1 ? ` • ${med.unitsPerBox}/box` : ''} • #{med.batchNo}
                   </p>
                 </div>
-                {canManage && <div className="flex gap-1 shrink-0">
-                  <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
+                {(canEdit || canDelete) && <div className="flex gap-1 shrink-0">
+                  {canEdit && <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded">
                     <Edit2 className="w-4 h-4" />
-                  </button>
+                  </button>}
                   {canDelete && <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded">
                     <Trash2 className="w-4 h-4" />
                   </button>}
@@ -311,7 +315,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
                     </div>
                   </td>
                   <td className="p-4 flex justify-end gap-2">
-                    {canManage && <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>}
+                    {canEdit && <button onClick={() => handleEdit(med)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded"><Edit2 className="w-4 h-4" /></button>}
                     {canDelete && <button onClick={() => setConfirmDeleteId(med.id)} className="p-1.5 text-red-600 hover:bg-red-50 rounded"><Trash2 className="w-4 h-4" /></button>}
                   </td>
                 </tr>

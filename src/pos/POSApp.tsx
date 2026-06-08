@@ -33,7 +33,7 @@ export function POSApp({ userRole, userProfile, onLoginSuccess, onBack, onLogout
   const isAdmin = r === 'admin';
   const canDashboard = isAdmin || r === 'pharmacist';
   const canBilling = roleOrPermission(r, ['admin', 'cashier'], userProfile, 'pos.billing.create');
-  const canMedicines = roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.medicines.view');
+  const canMedicines = roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.medicines.view', 'pos.medicines.create']);
   const canPurchases = roleOrPermission(r, ['admin', 'pharmacist'], userProfile, ['pos.purchases.view', 'pos.purchases.create']);
   const canPurchaseReturns = roleOrPermission(r, ['admin', 'pharmacist'], userProfile, 'pos.purchaseReturns.view');
   const canSales = roleOrPermission(r, ['admin', 'cashier', 'pharmacist'], userProfile, 'pos.sales.view');

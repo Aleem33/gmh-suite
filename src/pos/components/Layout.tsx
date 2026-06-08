@@ -18,7 +18,7 @@ const allNavItems = [
   { to: '/purchase-returns', icon: RotateCcw,       label: 'Purchase Returns', roles: ['admin', 'pharmacist'], permission: 'pos.purchaseReturns.view' },
   { to: '/sales',            icon: History,         label: 'Sales History',    roles: ['admin', 'cashier', 'pharmacist'], permission: 'pos.sales.view' },
   { to: '/sale-returns',     icon: RotateCcw,       label: 'Sale Returns',     roles: ['admin', 'cashier'], permission: 'pos.saleReturns.view' },
-  { to: '/medicines',        icon: Pill,            label: 'Medicines',        roles: ['admin', 'pharmacist'], permission: 'pos.medicines.view' },
+  { to: '/medicines',        icon: Pill,            label: 'Medicines',        roles: ['admin', 'pharmacist'], permissions: ['pos.medicines.view', 'pos.medicines.create'] },
   { to: '/customers',        icon: Users,           label: 'Customers',        roles: ['admin'], permission: 'pos.customers.view' },
   { to: '/suppliers',        icon: Truck,           label: 'Suppliers',        roles: ['admin', 'pharmacist'], permissions: ['pos.suppliers.view', 'pos.suppliers.create'] },
   { to: '/expenses',         icon: Receipt,         label: 'Expenses',         roles: ['admin'], permissions: ['pos.expenses.view', 'pos.expenses.create'] },

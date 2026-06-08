@@ -4,7 +4,7 @@ import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
   doc, increment, query, orderBy, getDocs, where
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../../firebase';
+import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import { printOrShare } from '../lib/nativeUtils';
 import {
@@ -23,6 +23,7 @@ export function Customers({ userProfile }: CustomersProps) {
   const [customers, setCustomers]       = useState<any[]>([]);
   const [sales, setSales]               = useState<any[]>([]);
   const [payments, setPayments]         = useState<any[]>([]);
+  const [approvalRequests, setApprovalRequests] = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [isModalOpen, setIsModalOpen]   = useState(false);
   const [editingId, setEditingId]       = useState<string | null>(null);
@@ -42,6 +43,7 @@ export function Customers({ userProfile }: CustomersProps) {
   const canEdit = isAdmin || hasPermission(userProfile, 'pos.customers.edit');
   const canDelete = isAdmin || hasPermission(userProfile, 'pos.customers.delete');
   const canRecordPayments = isAdmin || userProfile?.role === 'cashier';
+  const canRequestPayments = hasPermission(userProfile, 'pos.customers.paymentRequests.create') || userProfile?.username === 'haseeb';
   const canStartSale = isAdmin || userProfile?.role === 'cashier' || hasPermission(userProfile, 'pos.billing.create');
 
   useEffect(() => {
@@ -56,7 +58,16 @@ export function Customers({ userProfile }: CustomersProps) {
       snap => setPayments(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
       err => handleFirestoreError(err, OperationType.GET, 'customerPayments')
     );
-    return () => { unsub1(); unsub2(); unsub3(); };
+    let unsub4 = () => {};
+    const uid = auth.currentUser?.uid;
+    if (uid) {
+      unsub4 = onSnapshot(
+        query(collection(db, 'approvalRequests'), where('type', '==', 'customerPayment'), where('requestedBy', '==', uid)),
+        snap => setApprovalRequests(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+        err => handleFirestoreError(err, OperationType.GET, 'approvalRequests')
+      );
+    }
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   const filteredCustomers = customers.filter(c =>
@@ -83,14 +94,17 @@ export function Customers({ userProfile }: CustomersProps) {
   const totalPending = filteredCustomers.reduce((sum, c) => sum + getCustomerTotals(c.id).pending, 0);
 
   const openReceiptPayment = (cust: any, sale: any) => {
-    if (!canRecordPayments) return;
+    if (!canRecordPayments && !canRequestPayments) return;
     setPaymentModal({ customer: cust, sale });
     setPaymentAmount('');
     setPaymentNote('');
   };
 
+  const pendingPaymentRequest = (saleId: string) =>
+    approvalRequests.find(r => r.saleId === saleId && r.status === 'pending');
+
   const handleRecordPayment = async () => {
-    if (!canRecordPayments) return;
+    if (!canRecordPayments && !canRequestPayments) return;
     if (!paymentModal?.customer || !paymentModal?.sale) return;
     const amount = parseFloat(paymentAmount);
     if (!amount || amount <= 0) return;
@@ -100,6 +114,28 @@ export function Customers({ userProfile }: CustomersProps) {
     if (amount > maxPayable) return;
     setPaymentLoading(true);
     try {
+      if (!canRecordPayments) {
+        await addDoc(collection(db, 'approvalRequests'), {
+          type: 'customerPayment',
+          status: 'pending',
+          customerId: customer.id,
+          customerName: customer.name,
+          customerPhone: customer.phone || '',
+          saleId: sale.id,
+          saleDate: sale.date || '',
+          saleTotal: sale.total || 0,
+          previousPendingAmount: maxPayable,
+          amount,
+          note: paymentNote || '',
+          requestedBy: auth.currentUser?.uid || 'unknown',
+          requestedByName: userProfile?.name || userProfile?.username || 'Employee',
+          createdAt: new Date().toISOString(),
+        });
+        setPaymentModal(null); setPaymentAmount(''); setPaymentNote('');
+        setSuccessMsg(`Payment request sent for admin approval: ${formatCurrency(amount)} from ${customer.name}.`);
+        setTimeout(() => setSuccessMsg(''), 5000);
+        return;
+      }
       await addDoc(collection(db, 'customerPayments'), {
         customerId: customer.id,
         customerName: customer.name,
@@ -237,6 +273,7 @@ export function Customers({ userProfile }: CustomersProps) {
   const maxPayable = paymentModal?.sale?.pendingAmount || 0;
   const isPayValid = payAmount > 0 && payAmount <= maxPayable;
   const willClear  = payAmount === maxPayable;
+  const paymentSubmitLabel = canRecordPayments ? 'Record Payment' : 'Send for Approval';
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -410,12 +447,13 @@ export function Customers({ userProfile }: CustomersProps) {
                                   </p>
                                 </div>
                               </div>
-                              {canRecordPayments && (sale.pendingAmount || 0) > 0 && (
+                              {(canRecordPayments || canRequestPayments) && (sale.pendingAmount || 0) > 0 && (
                                 <button
+                                  disabled={!!pendingPaymentRequest(sale.id)}
                                   onClick={() => openReceiptPayment(cust, sale)}
-                                  className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700"
+                                  className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-lg bg-green-600 px-3 py-2 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
                                 >
-                                  <Wallet className="w-3.5 h-3.5" /> Pay This Receipt
+                                  <Wallet className="w-3.5 h-3.5" /> {pendingPaymentRequest(sale.id) ? 'Approval Pending' : canRecordPayments ? 'Pay This Receipt' : 'Request Payment Approval'}
                                 </button>
                               )}
                             </div>
@@ -466,10 +504,11 @@ export function Customers({ userProfile }: CustomersProps) {
                                   </td>
                                   <td className="p-3 text-right">
                                     <div className="flex items-center justify-end gap-2">
-                                      {canRecordPayments && (sale.pendingAmount || 0) > 0 && (
+                                      {(canRecordPayments || canRequestPayments) && (sale.pendingAmount || 0) > 0 && (
                                         <button onClick={() => openReceiptPayment(cust, sale)}
-                                          className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700">
-                                          <Wallet className="w-3.5 h-3.5" /> Pay
+                                          disabled={!!pendingPaymentRequest(sale.id)}
+                                          className="inline-flex items-center gap-1 rounded-md bg-green-600 px-2 py-1 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed">
+                                          <Wallet className="w-3.5 h-3.5" /> {pendingPaymentRequest(sale.id) ? 'Pending' : canRecordPayments ? 'Pay' : 'Request'}
                                         </button>
                                       )}
                                       <button onClick={() => setSelectedSale(sale)}
@@ -579,7 +618,7 @@ export function Customers({ userProfile }: CustomersProps) {
           <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
             <div className="p-5 border-b border-gray-100 flex justify-between items-start">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Record Payment</h2>
+                <h2 className="text-xl font-bold text-gray-900">{canRecordPayments ? 'Record Payment' : 'Request Payment Approval'}</h2>
                 <p className="text-sm text-gray-500 mt-0.5">
                   {paymentModal.customer.name}
                   {paymentModal.customer.phone ? ` - ${paymentModal.customer.phone}` : ''}
@@ -598,7 +637,7 @@ export function Customers({ userProfile }: CustomersProps) {
                 <span className="text-xl font-bold text-red-700">{formatCurrency(maxPayable)}</span>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Amount Received (Rs.)</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">{canRecordPayments ? 'Amount Received (Rs.)' : 'Amount Received by Employee (Rs.)'}</label>
                 <input type="number" min="1" max={maxPayable} value={paymentAmount}
                   onChange={e => setPaymentAmount(e.target.value)}
                   placeholder={`Max: ${maxPayable}`} autoFocus
@@ -643,7 +682,7 @@ export function Customers({ userProfile }: CustomersProps) {
                 <button onClick={handleRecordPayment} disabled={!isPayValid || paymentLoading}
                   className="flex-1 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2">
                   <Wallet className="w-4 h-4" />
-                  {paymentLoading ? 'Saving...' : 'Record Payment'}
+                  {paymentLoading ? 'Saving...' : paymentSubmitLabel}
                 </button>
               </div>
             </div>
@@ -748,8 +787,9 @@ export function Customers({ userProfile }: CustomersProps) {
                   <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg">
                     <span>Pending</span><span>{formatCurrency(selectedSale.pendingAmount)}</span>
                   </div>
-                  {canRecordPayments && customers.find(c => c.id === selectedSale.customerId) && (
+                  {(canRecordPayments || canRequestPayments) && customers.find(c => c.id === selectedSale.customerId) && (
                     <button
+                      disabled={!!pendingPaymentRequest(selectedSale.id)}
                       onClick={() => {
                         const cust = customers.find(c => c.id === selectedSale.customerId);
                         if (cust) {
@@ -757,9 +797,9 @@ export function Customers({ userProfile }: CustomersProps) {
                           openReceiptPayment(cust, selectedSale);
                         }
                       }}
-                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700"
+                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
-                      <Wallet className="w-4 h-4" /> Pay This Receipt
+                      <Wallet className="w-4 h-4" /> {pendingPaymentRequest(selectedSale.id) ? 'Approval Pending' : canRecordPayments ? 'Pay This Receipt' : 'Request Payment Approval'}
                     </button>
                   )}
                 </>

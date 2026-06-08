@@ -37,6 +37,7 @@ service cloud.firestore {
     function canPosBilling()  { return isPharmacist() || isCashier() || hasPerm('pos.billing.create'); }
     function canPosPurchases(){ return isPharmacist() || hasPerm('pos.purchases.create'); }
     function canPosMedicineCreate(){ return isPharmacist() || hasPerm('pos.medicines.create') || userDoc().username == 'haseeb'; }
+    function canCustomerPaymentRequest(){ return hasPerm('pos.customers.paymentRequests.create') || userDoc().username == 'haseeb'; }
 
     // ── Users ──────────────────────────────────────────────────────────────────
     match /users/{uid} {
@@ -149,6 +150,17 @@ service cloud.firestore {
           && request.resource.data.status == 'pending'
           && request.resource.data.createdBy == request.auth.uid);
       allow update: if isAdmin() || isAccountant();
+      allow delete: if isAdmin();
+    }
+
+    match /approvalRequests/{doc} {
+      allow read: if isAdmin() || (isAuth() && resource.data.requestedBy == request.auth.uid);
+      allow create: if isAuth()
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestedBy == request.auth.uid
+        && request.resource.data.type == 'customerPayment'
+        && canCustomerPaymentRequest();
+      allow update: if isAdmin();
       allow delete: if isAdmin();
     }
 

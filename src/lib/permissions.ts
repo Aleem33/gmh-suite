@@ -54,6 +54,7 @@ export const REQUESTED_USERS = [
       'pos.medicines.view',
       'pos.medicines.create',
       'pos.customers.view',
+      'pos.customers.paymentRequests.create',
       'pos.suppliers.view',
       'pos.suppliers.create',
       'pos.expenses.view',

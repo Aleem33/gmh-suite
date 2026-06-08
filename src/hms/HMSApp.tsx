@@ -22,6 +22,7 @@ import { TokenDisplay } from './pages/TokenDisplay';
 import { AuditLogs } from './pages/AuditLogs';
 import { Schedule } from './pages/Schedule';
 import { BedManagement } from './pages/BedManagement';
+import { Approvals } from './pages/Approvals';
 import { useAutoNotifications } from './lib/notifications';
 import { canAccessApp, hasAnyPermission, hasPermission, roleOrPermission, WORKFLOW_PERMISSIONS, type UserProfile } from '../lib/permissions';
 import { Billing as PosBilling } from '../pos/pages/Billing';
@@ -141,6 +142,7 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
             {isAdmin && <Route path="staff"    element={<Staff />} />}
             {isAdmin && <Route path="schedule" element={<Schedule />} />}
             {isAdmin && <Route path="beds"     element={<BedManagement />} />}
+            {isAdmin && <Route path="approvals" element={<Approvals />} />}
             {isAdmin && <Route path="expenses" element={<Expenses />} />}
             {isAdmin && <Route path="reports"  element={<Reports />} />}
             {isAdmin && <Route path="audit"    element={<AuditLogs />} />}

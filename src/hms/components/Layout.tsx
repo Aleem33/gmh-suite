@@ -8,7 +8,7 @@ import {
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
   Shield, CalendarCheck, Hotel, Monitor, BookOpen, Activity,
   X, ShoppingCart, PackagePlus, RotateCcw, History,
-  Lock,
+  Lock, ClipboardCheck,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
@@ -45,6 +45,7 @@ const NAV = [
       { to: '/staff',    icon: UserCog,       label: 'Staff',      roles: ['admin'] },
       { to: '/schedule', icon: CalendarCheck, label: 'Schedules',  roles: ['admin'] },
       { to: '/beds',     icon: Hotel,         label: 'Bed Mgmt',   roles: ['admin'] },
+      { to: '/approvals', icon: ClipboardCheck,label: 'Approvals',  roles: ['admin'] },
       { to: '/expenses', icon: TrendingDown,  label: 'Expenses',   roles: ['admin'] },
       { to: '/reports',  icon: BarChart3,     label: 'Reports',    roles: ['admin'] },
       { to: '/audit',    icon: Shield,        label: 'Audit Logs', roles: ['admin'] },

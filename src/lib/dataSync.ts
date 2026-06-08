@@ -31,6 +31,7 @@ export const GLOBAL_DATA_COLLECTIONS = [
   'posSales',
   'customers',
   'customerPayments',
+  'approvalRequests',
   'expenses',
   'posExpenses',
   'pharmacyOrders',

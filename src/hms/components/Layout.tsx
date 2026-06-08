@@ -8,10 +8,12 @@ import {
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
   Shield, CalendarCheck, Hotel, Monitor, BookOpen, Activity,
   X, ShoppingCart, PackagePlus, RotateCcw, History,
+  Lock,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
 import { TopNavbar } from './TopNavbar';
+import { ChangePasswordForm } from '../../components/ChangePasswordForm';
 import { canAccessApp, roleOrPermission, WORKFLOW_PERMISSIONS, type UserProfile } from '../../lib/permissions';
 
 const NAV = [
@@ -79,6 +81,7 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [pharmacyOpen, setPharmacyOpen] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
   const hmsAccess = canAccessApp(userProfile || { role }, 'hms');
@@ -211,6 +214,24 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
 
   const BottomActions = ({ mobile = false, onNavigate }: { mobile?: boolean; onNavigate?: () => void }) => (
     <div className="space-y-0.5">
+      <button
+        type="button"
+        onClick={() => {
+          setPasswordModalOpen(true);
+          onNavigate?.();
+        }}
+        title={!mobile && collapsed ? 'Change Password' : undefined}
+        className={cn(
+          'flex items-center gap-3 px-3 py-2 w-full rounded-lg text-sm transition-colors',
+          mobile
+            ? 'font-medium text-slate-700 hover:bg-slate-100'
+            : 'text-blue-100/70 hover:text-white hover:bg-white/10',
+          !mobile && collapsed && 'justify-center px-2'
+        )}
+      >
+        <Lock className="w-4 h-4" />
+        {(mobile || !collapsed) && 'Change Password'}
+      </button>
       <button onClick={onLogout || logout}
         title={!mobile && collapsed ? 'Logout' : undefined}
         className={cn(
@@ -327,6 +348,29 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
             </div>
           </main>
         </div>
+        {passwordModalOpen && (
+          <div className="fixed inset-0 z-[70] flex items-end justify-center bg-black/50 p-0 sm:items-center sm:p-4 print:hidden">
+            <div className="w-full max-w-md rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl">
+              <div className="flex items-center justify-between border-b border-gray-100 p-5">
+                <div className="flex items-center gap-2">
+                  <Lock className="w-5 h-5 text-blue-600" />
+                  <h2 className="font-semibold text-gray-900">Change Password</h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPasswordModalOpen(false)}
+                  className="p-1 text-gray-400 hover:text-gray-600"
+                  aria-label="Close change password"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-5">
+                <ChangePasswordForm />
+              </div>
+            </div>
+          </div>
+        )}
     </div>
   );
 }

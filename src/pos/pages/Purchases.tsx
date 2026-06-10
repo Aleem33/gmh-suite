@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, doc, updateDoc, increment } from 'firebase/firestore';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
-import { Plus, Search, Truck, PackagePlus, X, ChevronDown, CheckCircle } from 'lucide-react';
-import { format } from 'date-fns';
+import { Plus, Search, Truck, PackagePlus, X, ChevronDown, CheckCircle, CalendarDays, RotateCcw, TrendingDown } from 'lucide-react';
+import { format, startOfMonth, startOfWeek } from 'date-fns';
 import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 interface PurchasesProps {
@@ -14,7 +14,11 @@ export function Purchases({ userProfile }: PurchasesProps) {
   const [medicines, setMedicines] = useState<any[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
   const [purchases, setPurchases] = useState<any[]>([]);
+  const [purchaseReturns, setPurchaseReturns] = useState<any[]>([]);
   const [search, setSearch] = useState('');
+  const [dateFilter, setDateFilter] = useState<'week' | 'month' | 'custom' | 'all'>('month');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -38,14 +42,59 @@ export function Purchases({ userProfile }: PurchasesProps) {
       list.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setPurchases(list);
     }, e => handleFirestoreError(e, OperationType.GET, 'purchases'));
-    return () => { u1(); u2(); u3(); };
+    const u4 = onSnapshot(collection(db, 'purchaseReturns'), s => {
+      const list = s.docs.map(d => ({ id: d.id, ...d.data() }));
+      setPurchaseReturns(list);
+    }, e => handleFirestoreError(e, OperationType.GET, 'purchaseReturns'));
+    return () => { u1(); u2(); u3(); u4(); };
   }, []);
 
-  const filteredPurchases = purchases.filter(p =>
-    p.medicineName?.toLowerCase().includes(search.toLowerCase()) ||
-    p.batchNo?.toLowerCase().includes(search.toLowerCase()) ||
-    p.supplierName?.toLowerCase().includes(search.toLowerCase())
-  );
+  const getDateRange = () => {
+    const now = new Date();
+    if (dateFilter === 'week') return { start: startOfWeek(now, { weekStartsOn: 1 }), end: now };
+    if (dateFilter === 'month') return { start: startOfMonth(now), end: now };
+    if (dateFilter === 'custom') {
+      const start = customStart ? new Date(`${customStart}T00:00:00`) : null;
+      const end = customEnd ? new Date(`${customEnd}T23:59:59.999`) : null;
+      return { start, end };
+    }
+    return { start: null, end: null };
+  };
+
+  const inDateRange = (dateValue: string | undefined) => {
+    if (!dateValue) return false;
+    const date = new Date(dateValue);
+    if (Number.isNaN(date.getTime())) return false;
+    const { start, end } = getDateRange();
+    if (start && date < start) return false;
+    if (end && date > end) return false;
+    return true;
+  };
+
+  const filteredPurchases = purchases.filter(p => {
+    const q = search.toLowerCase();
+    const matchSearch =
+      !q ||
+      p.medicineName?.toLowerCase().includes(q) ||
+      p.batchNo?.toLowerCase().includes(q) ||
+      p.supplierName?.toLowerCase().includes(q);
+    return matchSearch && inDateRange(p.date);
+  });
+
+  const filteredPurchaseIds = new Set(filteredPurchases.map(p => p.id));
+  const filteredReturns = purchaseReturns.filter(r => {
+    if (r.originalPurchaseId) return filteredPurchaseIds.has(r.originalPurchaseId);
+    return inDateRange(r.date);
+  });
+  const purchaseTotals = {
+    grossCost: filteredPurchases.reduce((sum, p) => sum + (Number(p.totalCost) || 0), 0),
+    returnedValue: filteredReturns.reduce((sum, r) => sum + (Number(r.refundAmount) || 0), 0),
+    unitsAdded: filteredPurchases.reduce((sum, p) => sum + (Number(p.totalUnitsAdded) || 0), 0),
+    unitsReturned: filteredReturns.reduce((sum, r) => sum + (Number(r.totalUnitsReturned) || 0), 0),
+    purchaseCount: filteredPurchases.length,
+    supplierCount: new Set(filteredPurchases.map(p => p.supplierId || p.supplierName).filter(Boolean)).size,
+  };
+  const netPurchaseCost = Math.max(0, purchaseTotals.grossCost - purchaseTotals.returnedValue);
 
   const filteredMeds = medicines.filter(m =>
     m.name.toLowerCase().includes(medSearch.toLowerCase()) ||
@@ -148,9 +197,89 @@ export function Purchases({ userProfile }: PurchasesProps) {
         </button>}
       </div>
 
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          { label: 'Total Purchases', value: formatCurrency(purchaseTotals.grossCost), icon: PackagePlus, tone: 'text-blue-700 bg-blue-50' },
+          { label: 'Purchase Returns', value: `-${formatCurrency(purchaseTotals.returnedValue)}`, icon: RotateCcw, tone: 'text-orange-700 bg-orange-50' },
+          { label: 'Net Purchase Cost', value: formatCurrency(netPurchaseCost), icon: TrendingDown, tone: 'text-emerald-700 bg-emerald-50' },
+          { label: 'Units', value: `${purchaseTotals.unitsAdded - purchaseTotals.unitsReturned}`, sub: `${purchaseTotals.unitsAdded} in / ${purchaseTotals.unitsReturned} returned`, icon: Truck, tone: 'text-slate-700 bg-slate-50' },
+        ].map(({ label, value, sub, icon: Icon, tone }) => (
+          <div key={label} className="bg-white border border-gray-100 rounded-xl p-3 md:p-4 shadow-sm">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-gray-500">{label}</p>
+              <span className={`w-8 h-8 rounded-lg flex items-center justify-center ${tone}`}>
+                <Icon className="w-4 h-4" />
+              </span>
+            </div>
+            <p className="text-lg md:text-xl font-bold text-gray-900 mt-2">{value}</p>
+            {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
+          <p className="text-xs text-gray-500">Purchase Count</p>
+          <p className="text-xl font-bold text-gray-900">{purchaseTotals.purchaseCount}</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
+          <p className="text-xs text-gray-500">Suppliers</p>
+          <p className="text-xl font-bold text-gray-900">{purchaseTotals.supplierCount}</p>
+        </div>
+        <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm md:col-span-2">
+          <p className="text-xs text-gray-500">Showing</p>
+          <p className="text-sm font-semibold text-gray-900 mt-1">
+            {dateFilter === 'week' ? 'This week' : dateFilter === 'month' ? 'This month' : dateFilter === 'custom' ? 'Custom date range' : 'All time'}
+          </p>
+        </div>
+      </div>
+
       {/* List */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100">
+        <div className="p-4 border-b border-gray-100 space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            {([
+              ['week', 'This Week'],
+              ['month', 'This Month'],
+              ['custom', 'Custom'],
+              ['all', 'All Time'],
+            ] as const).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => setDateFilter(value)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                  dateFilter === value
+                    ? 'bg-blue-600 text-white border-blue-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            {dateFilter === 'custom' && (
+              <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+                <label className="relative">
+                  <CalendarDays className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="date"
+                    value={customStart}
+                    onChange={e => setCustomStart(e.target.value)}
+                    className="w-full sm:w-40 pl-9 pr-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+                <label className="relative">
+                  <CalendarDays className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="date"
+                    value={customEnd}
+                    onChange={e => setCustomEnd(e.target.value)}
+                    className="w-full sm:w-40 pl-9 pr-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </label>
+              </div>
+            )}
+          </div>
           <div className="relative">
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search by medicine, batch, or supplier..."
@@ -186,7 +315,7 @@ export function Purchases({ userProfile }: PurchasesProps) {
           {filteredPurchases.length === 0 && (
             <div className="p-8 text-center text-gray-500">
               <PackagePlus className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-              No purchase records yet.
+              No purchase records match these filters.
             </div>
           )}
         </div>
@@ -228,10 +357,28 @@ export function Purchases({ userProfile }: PurchasesProps) {
               ))}
               {filteredPurchases.length === 0 && (
                 <tr><td colSpan={7} className="p-8 text-center text-gray-500">
-                  <PackagePlus className="w-10 h-10 text-gray-300 mx-auto mb-2" />No purchase records yet.
+                  <PackagePlus className="w-10 h-10 text-gray-300 mx-auto mb-2" />No purchase records match these filters.
                 </td></tr>
               )}
             </tbody>
+            {filteredPurchases.length > 0 && (
+              <tfoot className="bg-gray-50 border-t border-gray-100">
+                <tr>
+                  <td className="p-4 text-gray-700 font-semibold" colSpan={4}>
+                    Filtered total - {purchaseTotals.purchaseCount} purchase(s), {purchaseTotals.supplierCount} supplier(s)
+                  </td>
+                  <td className="p-4 text-gray-700 font-semibold">
+                    +{purchaseTotals.unitsAdded - purchaseTotals.unitsReturned} net units
+                  </td>
+                  <td className="p-4 text-orange-700 font-semibold">
+                    Returns: {formatCurrency(purchaseTotals.returnedValue)}
+                  </td>
+                  <td className="p-4 text-emerald-700 font-bold">
+                    Net: {formatCurrency(netPurchaseCost)}
+                  </td>
+                </tr>
+              </tfoot>
+            )}
           </table>
         </div>
       </div>

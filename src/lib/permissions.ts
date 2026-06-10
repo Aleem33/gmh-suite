@@ -112,6 +112,23 @@ export const WORKFLOW_PERMISSIONS = {
   posExpensesView: ['pos.expenses.view', 'pos.expenses.create'],
   posExpensesCreate: ['pos.expenses.create'],
   posReportsView: ['pos.reports.view'],
+  posDashboardView: [
+    'pos.billing.create',
+    'pos.purchases.view',
+    'pos.purchases.create',
+    'pos.purchaseReturns.view',
+    'pos.sales.view',
+    'pos.saleReturns.view',
+    'pos.medicines.view',
+    'pos.medicines.create',
+    'pos.customers.view',
+    'pos.customers.paymentRequests.create',
+    'pos.suppliers.view',
+    'pos.suppliers.create',
+    'pos.expenses.view',
+    'pos.expenses.create',
+    'pos.reports.view',
+  ],
 } as const;
 
 export type WorkflowPermissionKey = keyof typeof WORKFLOW_PERMISSIONS;

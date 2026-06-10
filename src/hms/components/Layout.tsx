@@ -55,6 +55,7 @@ const NAV = [
 ];
 
 const PHARMACY_NAV = [
+  { to: '/pharmacy/dashboard',        icon: LayoutDashboard, label: 'Dashboard',         roles: ['admin','pharmacist','cashier'], permissions: WORKFLOW_PERMISSIONS.posDashboardView },
   { to: '/pharmacy/orders',           icon: Pill,         label: 'Orders / Dispense', roles: ['admin','pharmacist'] },
   { to: '/pharmacy/billing',          icon: ShoppingCart, label: 'Billing',           roles: ['admin','cashier'], permissions: WORKFLOW_PERMISSIONS.posBillingCreate },
   { to: '/pharmacy/patient-history',  icon: ClipboardList,label: 'Patient Rx',        roles: ['admin','pharmacist','cashier'] },

@@ -25,6 +25,7 @@ import { BedManagement } from './pages/BedManagement';
 import { Approvals } from './pages/Approvals';
 import { useAutoNotifications } from './lib/notifications';
 import { canAccessApp, hasAnyPermission, hasPermission, roleOrPermission, WORKFLOW_PERMISSIONS, type UserProfile } from '../lib/permissions';
+import { Dashboard as PosDashboard } from '../pos/pages/Dashboard';
 import { Billing as PosBilling } from '../pos/pages/Billing';
 import { Medicines as PosMedicines } from '../pos/pages/Medicines';
 import { Purchases as PosPurchases } from '../pos/pages/Purchases';
@@ -69,7 +70,7 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
   const canBilling = hmsAccess && roleOrPermission(r, ['admin','cashier'], userProfile, WORKFLOW_PERMISSIONS.hmsBillingCreate);
   const canCreateOnlyBilling = hasPermission(userProfile, 'hms.billing.create') && !['admin', 'cashier'].includes(r);
   const canPharmacyOrders = posAccess && (isAdmin || r === 'pharmacist');
-  const canPosDashboard = posAccess && (isAdmin || r === 'pharmacist');
+  const canPosDashboard = posAccess && roleOrPermission(r, ['admin', 'pharmacist', 'cashier'], userProfile, WORKFLOW_PERMISSIONS.posDashboardView);
   const canPosBilling = posAccess && roleOrPermission(r, ['admin', 'cashier'], userProfile, WORKFLOW_PERMISSIONS.posBillingCreate);
   const canPosMedicines = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posMedicinesView);
   const canPosPurchases = posAccess && roleOrPermission(r, ['admin', 'pharmacist'], userProfile, WORKFLOW_PERMISSIONS.posPurchasesView);
@@ -86,6 +87,7 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
     canPosPurchaseReturns || canPosSales || canPosSaleReturns || canPosCustomers || canPosSuppliers ||
     canPosExpenses || canPosReports || canPosPatientHistory || isAdmin;
   const defaultPharmacyPath =
+    canPosDashboard ? '/pharmacy/dashboard' :
     canPharmacyOrders ? '/pharmacy/orders' :
     canPosBilling ? '/pharmacy/billing' :
     canPosSales ? '/pharmacy/sales' :
@@ -122,6 +124,7 @@ export function HMSApp({ userRole, userProfile, userEmail, onLoginSuccess, onBac
             {['admin','doctor'].includes(r)                         && <Route path="prescriptions"         element={<Prescriptions />} />}
             {['admin','doctor'].includes(r)                         && <Route path="prescription-templates" element={<PrescriptionTemplates />} />}
             {hmsAccess && ['admin','doctor','lab_technician'].includes(r) && <Route path="lab"             element={<Lab />} />}
+            {canPosDashboard && <Route path="pharmacy/dashboard" element={<PosDashboard />} />}
             {canPharmacyOrders && <Route path="pharmacy/orders" element={<Pharmacy />} />}
             {canPosBilling && <Route path="pharmacy/billing" element={<PosBilling userProfile={userProfile} />} />}
             {canPosPatientHistory && <Route path="pharmacy/patient-history" element={<PosPatientHistory />} />}

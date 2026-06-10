@@ -4,6 +4,13 @@ import { printPageOrShare, downloadOrShare } from '../lib/nativeUtils';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
+  getGrossSubtotal,
+  getItemReturnTotals,
+  getNetItemAmount,
+  getNetItemQuantity,
+  getSaleAccounting,
+} from '../lib/salesAccounting';
+import {
   Search, FileText, Eye, X, Printer, Download,
   Users, Building2, LayoutList, Table2,
   ArrowUpDown, ArrowUp, ArrowDown, SlidersHorizontal, Edit2, Save,
@@ -30,8 +37,7 @@ function thClass(active: boolean) {
 }
 
 function getGross(sale: any): number {
-  if (sale.grossSubtotal != null) return sale.grossSubtotal;
-  return (sale.subtotal || 0) + (sale.totalItemDiscounts || 0);
+  return getGrossSubtotal(sale);
 }
 
 function getItemCategory(item: any): string {
@@ -48,6 +54,7 @@ interface SalesHistoryProps {
 
 export function SalesHistory({ userProfile }: SalesHistoryProps) {
   const [sales, setSales]               = useState<any[]>([]);
+  const [saleReturns, setSaleReturns]   = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [selectedSale, setSelectedSale] = useState<any | null>(null);
   const [editingSale, setEditingSale]       = useState<any | null>(null);
@@ -76,7 +83,10 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
     const unsub = onSnapshot(q, snap => {
       setSales(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => handleFirestoreError(err, OperationType.GET, 'sales'));
-    return () => unsub();
+    const unsubReturns = onSnapshot(collection(db, 'saleReturns'), snap => {
+      setSaleReturns(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, err => handleFirestoreError(err, OperationType.GET, 'saleReturns'));
+    return () => { unsub(); unsubReturns(); };
   }, []);
 
   const categoryOptions = useMemo(() => {
@@ -123,13 +133,13 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
       if (col === 'items')    { av = a.items?.length || 0;            bv = b.items?.length || 0; }
       if (col === 'subtotal') { av = getGross(a);                     bv = getGross(b); }
       if (col === 'discount') { av = a.discount || 0;                 bv = b.discount || 0; }
-      if (col === 'total')    { av = a.total || 0;                    bv = b.total || 0; }
+      if (col === 'total')    { av = getSaleAccounting(a, saleReturns).netTotal; bv = getSaleAccounting(b, saleReturns).netTotal; }
       if (av < bv) return dir === 'asc' ? -1 : 1;
       if (av > bv) return dir === 'asc' ?  1 : -1;
       return 0;
     });
     return arr;
-  }, [filteredSales, summarySort]);
+  }, [filteredSales, summarySort, saleReturns]);
 
   const flatRows = useMemo(() => {
     const rows: any[] = [];
@@ -158,13 +168,13 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
       if (col === 'itemTotal') { av = ai?.total || 0;                  bv = bi?.total || 0; }
       if (col === 'subtotal')  { av = getGross(a);                     bv = getGross(b); }
       if (col === 'discount')  { av = a.discount || 0;                 bv = b.discount || 0; }
-      if (col === 'saleTotal') { av = a.total || 0;                    bv = b.total || 0; }
+      if (col === 'saleTotal') { av = getSaleAccounting(a, saleReturns).netTotal; bv = getSaleAccounting(b, saleReturns).netTotal; }
       if (av < bv) return dir === 'asc' ? -1 : 1;
       if (av > bv) return dir === 'asc' ?  1 : -1;
       return 0;
     });
     return arr;
-  }, [flatRows, excelSort]);
+  }, [flatRows, excelSort, saleReturns]);
 
   const toggleSummarySort = (col: SummaryCol) =>
     setSummarySort(prev => prev.col === col
@@ -176,12 +186,26 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
       ? { col, dir: prev.dir === 'asc' ? 'desc' : prev.dir === 'desc' ? null : 'asc' }
       : { col, dir: 'asc' });
 
-  const totals = useMemo(() => ({
-    subtotal: filteredSales.reduce((s, r) => s + getGross(r), 0),
-    discount: filteredSales.reduce((s, r) => s + (r.discount || 0), 0),
-    total:    filteredSales.reduce((s, r) => s + (r.total    || 0), 0),
-    pending:  filteredSales.reduce((s, r) => s + (r.pendingAmount || 0), 0),
-  }), [filteredSales]);
+  const totals = useMemo(() => {
+    if (categoryFilter !== 'all') {
+      const grossItems = flatRows.reduce((s, { item }) => s + (Number(item?.total) || 0), 0);
+      const itemReturns = flatRows.reduce((s, { sale, item }) => item ? s + getItemReturnTotals(saleReturns, sale.id, item.cartItemId).amount : s, 0);
+      return {
+        subtotal: grossItems,
+        discount: 0,
+        returns: itemReturns,
+        total: flatRows.reduce((s, { sale, item }) => s + getNetItemAmount(sale, item, saleReturns), 0),
+        pending: filteredSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).netPending, 0),
+      };
+    }
+    return {
+      subtotal: filteredSales.reduce((s, r) => s + getGross(r), 0),
+      discount: filteredSales.reduce((s, r) => s + (r.discount || 0), 0),
+      returns: filteredSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).returnTotal, 0),
+      total: filteredSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).netTotal, 0),
+      pending: filteredSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).netPending, 0),
+    };
+  }, [categoryFilter, flatRows, filteredSales, saleReturns]);
 
   const handleSaveEdit = async () => {
     if (!editingSale) return;
@@ -233,41 +257,46 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
   const doExport = () => {
     const exportSales = applyFilters(sales, exportType, exportCategory, exportDateFrom, exportDateTo, '');
     const rows: string[][] = [
-      ['Date & Time','Sale ID','Sale Type','Customer','Category','Item Name','Sell Type','Quantity','Unit Price','Item Total','Gross Subtotal','Sale Discount','Sale Total','Amount Paid','Pending Amount'],
+      ['Date & Time','Sale ID','Sale Type','Customer','Category','Item Name','Sell Type','Net Quantity','Unit Price','Net Item Total','Gross Subtotal','Sale Discount','Net Sale Total','Amount Paid','Pending Amount','Sale Returns','Item Return'],
     ];
     exportSales.forEach(sale => {
       const dateStr  = sale.date ? format(new Date(sale.date), 'dd/MM/yyyy HH:mm') : 'N/A';
       const saleType = sale.customerType === 'hospital' ? 'Hospital' : 'Customer';
       const custName = sale.customerName || '';
       const gross = getGross(sale);
-      const paid  = sale.amountPaid ?? sale.total ?? 0;
-      const pend  = sale.pendingAmount || 0;
+      const accounting = getSaleAccounting(sale, saleReturns);
+      const paid  = accounting.netPaid;
+      const pend  = accounting.netPending;
       if (sale.items?.length) {
         sale.items.filter((item: any) => exportCategory === 'all' || getItemCategory(item) === exportCategory).forEach((item: any, idx: number) => {
+          const itemReturns = getItemReturnTotals(saleReturns, sale.id, item.cartItemId);
           rows.push([
             dateStr, sale.id, saleType, custName,
             getItemCategory(item),
             item.name || '', item.sellType || '',
-            String(item.quantity || 0), String(item.price || 0), String(item.total || 0),
+            String(getNetItemQuantity(sale, item, saleReturns)), String(item.price || 0), String(getNetItemAmount(sale, item, saleReturns)),
             idx === 0 ? String(gross)              : '',
             idx === 0 ? String(sale.discount || 0) : '',
-            idx === 0 ? String(sale.total    || 0) : '',
+            idx === 0 ? String(accounting.netTotal) : '',
             idx === 0 ? String(paid)               : '',
             idx === 0 ? String(pend)               : '',
+            idx === 0 ? String(accounting.returnTotal) : '',
+            itemReturns.amount > 0 ? String(itemReturns.amount) : '',
           ]);
         });
       } else {
         rows.push([dateStr, sale.id, saleType, custName, '', '(no items)', '', '', '', '',
-          String(gross), String(sale.discount || 0), String(sale.total || 0), String(paid), String(pend)]);
+          String(gross), String(sale.discount || 0), String(accounting.netTotal), String(paid), String(pend), String(accounting.returnTotal), '']);
       }
     });
     const gSub = exportSales.reduce((s, r) => s + getGross(r), 0);
     const gDis = exportSales.reduce((s, r) => s + (r.discount || 0), 0);
-    const gTot = exportSales.reduce((s, r) => s + (r.total    || 0), 0);
-    const gPen = exportSales.reduce((s, r) => s + (r.pendingAmount || 0), 0);
-    const gQty = exportSales.reduce((s, r) => s + (r.items?.reduce((q: number, it: any) => q + (it.quantity || 0), 0) || 0), 0);
+    const gRet = exportSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).returnTotal, 0);
+    const gTot = exportSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).netTotal, 0);
+    const gPen = exportSales.reduce((s, r) => s + getSaleAccounting(r, saleReturns).netPending, 0);
+    const gQty = exportSales.reduce((s, r) => s + (r.items?.reduce((q: number, it: any) => q + getNetItemQuantity(r, it, saleReturns), 0) || 0), 0);
     rows.push([]);
-    rows.push(['TOTAL', `${exportSales.length} sales`, '', '', '', '', String(gQty), '', '', String(gSub), String(gDis), String(gTot), '', String(gPen)]);
+    rows.push(['TOTAL', `${exportSales.length} sales`, '', '', '', '', String(gQty), '', '', String(gSub), String(gDis), String(gTot), '', String(gPen), String(gRet), '']);
     const csv  = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n');
     const typeLabel  = exportType === 'all' ? 'all' : exportType === 'hospital' ? 'hospitals' : 'customers';
     const categoryLabel = exportCategory === 'all' ? 'all_categories' : exportCategory.toLowerCase().replace(/\s+/g, '_');
@@ -318,11 +347,14 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
           <div className="border-t border-black border-dashed pt-2 space-y-1">
             <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(getGross(selectedSale))}</span></div>
             {selectedSale.discount > 0 && <div className="flex justify-between"><span>Discount:</span><span>-{formatCurrency(selectedSale.discount)}</span></div>}
-            <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t border-black"><span>Total:</span><span>{formatCurrency(selectedSale.total)}</span></div>
-            {selectedSale.pendingAmount > 0 && (
+            {getSaleAccounting(selectedSale, saleReturns).returnTotal > 0 && (
+              <div className="flex justify-between"><span>Returns:</span><span>-{formatCurrency(getSaleAccounting(selectedSale, saleReturns).returnTotal)}</span></div>
+            )}
+            <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t border-black"><span>Net Total:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netTotal)}</span></div>
+            {getSaleAccounting(selectedSale, saleReturns).netPending > 0 && (
               <>
-                <div className="flex justify-between"><span>Paid:</span><span>{formatCurrency(selectedSale.amountPaid)}</span></div>
-                <div className="flex justify-between font-bold"><span>Pending:</span><span>{formatCurrency(selectedSale.pendingAmount)}</span></div>
+                <div className="flex justify-between"><span>Paid:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPaid)}</span></div>
+                <div className="flex justify-between font-bold"><span>Pending:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPending)}</span></div>
               </>
             )}
           </div>
@@ -355,16 +387,16 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                   <td className="py-1">{sale.date ? format(new Date(sale.date), 'dd/MM/yyyy') : 'N/A'}</td>
                   <td className="py-1">{getItemCategory(item)}</td>
                   <td className="py-1">{item.name}</td>
-                  <td className="py-1 text-right">{item.quantity || 0}</td>
-                  <td className="py-1 text-right">{formatCurrency(item.total || 0)}</td>
+                <td className="py-1 text-right">{getNetItemQuantity(sale, item, saleReturns)}</td>
+                <td className="py-1 text-right">{formatCurrency(getNetItemAmount(sale, item, saleReturns))}</td>
                 </tr>
               ) : null)}
             </tbody>
             <tfoot>
               <tr className="border-t border-black font-bold">
                 <td className="py-2" colSpan={3}>Total</td>
-                <td className="py-2 text-right">{sortedExcel.reduce((s, { item }) => s + (item?.quantity || 0), 0)}</td>
-                <td className="py-2 text-right">{formatCurrency(sortedExcel.reduce((s, { item }) => s + (item?.total || 0), 0))}</td>
+                <td className="py-2 text-right">{sortedExcel.reduce((s, { sale, item }) => s + getNetItemQuantity(sale, item, saleReturns), 0)}</td>
+                <td className="py-2 text-right">{formatCurrency(sortedExcel.reduce((s, { sale, item }) => s + getNetItemAmount(sale, item, saleReturns), 0))}</td>
               </tr>
             </tfoot>
           </table>
@@ -403,9 +435,9 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
         {filteredSales.length > 0 && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 md:gap-3">
             {[
-              { label: 'Gross Subtotal',  value: totals.subtotal, color: 'text-gray-900' },
-              { label: 'Total Discounts', value: totals.discount, color: 'text-red-600', prefix: '-' },
-              { label: 'Net Revenue',     value: totals.total,    color: 'text-blue-700' },
+              { label: 'Gross Sales',     value: totals.subtotal - totals.discount, color: 'text-gray-900' },
+              { label: 'Sale Returns',    value: totals.returns,  color: 'text-red-600', prefix: '-' },
+              { label: 'Net Sales',       value: totals.total,    color: 'text-blue-700' },
               { label: 'Pending',         value: totals.pending,  color: totals.pending > 0 ? 'text-orange-600' : 'text-gray-400' },
             ].map(({ label, value, color, prefix }) => (
               <div key={label} className="bg-white rounded-xl border border-gray-100 shadow-sm px-3 py-2.5 md:px-4 md:py-3">
@@ -505,15 +537,18 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                         {sale.customerType || 'customer'}
                       </span>
                       {sale.customerName && <span className="text-xs text-gray-600">{sale.customerName}</span>}
-                      {sale.pendingAmount > 0 && (
+                      {getSaleAccounting(sale, saleReturns).netPending > 0 && (
                         <span className="text-[10px] font-bold text-red-700 bg-red-100 px-1.5 py-0.5 rounded">
-                          Due {formatCurrency(sale.pendingAmount)}
+                          Due {formatCurrency(getSaleAccounting(sale, saleReturns).netPending)}
                         </span>
                       )}
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="font-bold text-gray-900">{formatCurrency(sale.total)}</p>
+                    <p className="font-bold text-gray-900">{formatCurrency(getSaleAccounting(sale, saleReturns).netTotal)}</p>
+                    {getSaleAccounting(sale, saleReturns).returnTotal > 0 && (
+                      <p className="text-[10px] text-red-500">Returned -{formatCurrency(getSaleAccounting(sale, saleReturns).returnTotal)}</p>
+                    )}
                     <p className="text-xs text-gray-400">{sale.items?.length || 0} items</p>
                   </div>
                 </div>
@@ -556,7 +591,7 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                     <th className={thClass(summarySort.col === 'items')}    onClick={() => toggleSummarySort('items')}><span className="flex items-center">Items <SortIcon col="items" sort={summarySort} /></span></th>
                     <th className={thClass(summarySort.col === 'subtotal')} onClick={() => toggleSummarySort('subtotal')}><span className="flex items-center">Subtotal <SortIcon col="subtotal" sort={summarySort} /></span></th>
                     <th className={thClass(summarySort.col === 'discount')} onClick={() => toggleSummarySort('discount')}><span className="flex items-center">Discount <SortIcon col="discount" sort={summarySort} /></span></th>
-                    <th className={thClass(summarySort.col === 'total')}    onClick={() => toggleSummarySort('total')}><span className="flex items-center">Total <SortIcon col="total" sort={summarySort} /></span></th>
+                    <th className={thClass(summarySort.col === 'total')}    onClick={() => toggleSummarySort('total')}><span className="flex items-center">Net Total <SortIcon col="total" sort={summarySort} /></span></th>
                     <th className="p-4 font-medium text-gray-500 text-right">Actions</th>
                   </tr>
                 </thead>
@@ -567,13 +602,18 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                       <td className="p-4 text-gray-500 font-mono text-sm">{sale.id.slice(0, 8)}…</td>
                       <td className="p-4 text-sm">
                         {sale.customerName ? <span className="font-medium text-gray-800">{sale.customerName}</span> : <span className="text-gray-300 italic text-xs">—</span>}
-                        {sale.pendingAmount > 0 && <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">Due {formatCurrency(sale.pendingAmount)}</span>}
+                        {getSaleAccounting(sale, saleReturns).netPending > 0 && <span className="ml-1.5 inline-block px-1.5 py-0.5 bg-red-100 text-red-700 rounded text-[10px] font-bold">Due {formatCurrency(getSaleAccounting(sale, saleReturns).netPending)}</span>}
                       </td>
                       <td className="p-4"><span className={`inline-block px-2 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${sale.customerType === 'hospital' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{sale.customerType || 'customer'}</span></td>
                       <td className="p-4 text-gray-600">{sale.items?.length || 0} items</td>
                       <td className="p-4 text-gray-600">{formatCurrency(getGross(sale))}</td>
                       <td className="p-4 text-red-600">{sale.discount > 0 ? `-${formatCurrency(sale.discount)}` : '—'}</td>
-                      <td className="p-4 font-bold text-gray-900">{formatCurrency(sale.total)}</td>
+                      <td className="p-4 font-bold text-gray-900">
+                        {formatCurrency(getSaleAccounting(sale, saleReturns).netTotal)}
+                        {getSaleAccounting(sale, saleReturns).returnTotal > 0 && (
+                          <div className="text-xs font-medium text-red-500">Returned -{formatCurrency(getSaleAccounting(sale, saleReturns).returnTotal)}</div>
+                        )}
+                      </td>
                       <td className="p-4">
                         <div className="flex justify-end gap-1">
                           <button onClick={() => setSelectedSale(sale)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded flex items-center gap-1 text-sm font-medium">
@@ -600,7 +640,10 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                       <td className="p-4 text-blue-800" colSpan={5}>TOTAL — {filteredSales.length} sales</td>
                       <td className="p-4 text-blue-800">{formatCurrency(totals.subtotal)}</td>
                       <td className="p-4 text-red-600">-{formatCurrency(totals.discount)}</td>
-                      <td className="p-4 text-blue-900 text-base">{formatCurrency(totals.total)}</td>
+                      <td className="p-4 text-blue-900 text-base">
+                        {formatCurrency(totals.total)}
+                        {totals.returns > 0 && <div className="text-xs text-red-600">Returns -{formatCurrency(totals.returns)}</div>}
+                      </td>
                       <td className="p-4" />
                     </tr>
                   </tfoot>
@@ -622,10 +665,10 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                     <th className={thClass(excelSort.col === 'sellType')}  onClick={() => toggleExcelSort('sellType')}><span className="flex items-center">Sell Type <SortIcon col="sellType" sort={excelSort} /></span></th>
                     <th className={thClass(excelSort.col === 'quantity')}  onClick={() => toggleExcelSort('quantity')}><span className="flex items-center">Qty <SortIcon col="quantity" sort={excelSort} /></span></th>
                     <th className={thClass(excelSort.col === 'unitPrice')} onClick={() => toggleExcelSort('unitPrice')}><span className="flex items-center">Unit Price <SortIcon col="unitPrice" sort={excelSort} /></span></th>
-                    <th className={thClass(excelSort.col === 'itemTotal')} onClick={() => toggleExcelSort('itemTotal')}><span className="flex items-center">Item Total <SortIcon col="itemTotal" sort={excelSort} /></span></th>
+                    <th className={thClass(excelSort.col === 'itemTotal')} onClick={() => toggleExcelSort('itemTotal')}><span className="flex items-center">Net Item Total <SortIcon col="itemTotal" sort={excelSort} /></span></th>
                     <th className={thClass(excelSort.col === 'subtotal')}  onClick={() => toggleExcelSort('subtotal')}><span className="flex items-center">Gross Sub <SortIcon col="subtotal" sort={excelSort} /></span></th>
                     <th className={thClass(excelSort.col === 'discount')}  onClick={() => toggleExcelSort('discount')}><span className="flex items-center">Discount <SortIcon col="discount" sort={excelSort} /></span></th>
-                    <th className={thClass(excelSort.col === 'saleTotal')} onClick={() => toggleExcelSort('saleTotal')}><span className="flex items-center">Sale Total <SortIcon col="saleTotal" sort={excelSort} /></span></th>
+                    <th className={thClass(excelSort.col === 'saleTotal')} onClick={() => toggleExcelSort('saleTotal')}><span className="flex items-center">Net Sale Total <SortIcon col="saleTotal" sort={excelSort} /></span></th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
@@ -636,12 +679,12 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                       <td className="p-3"><span className={`inline-block px-2 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider ${sale.customerType === 'hospital' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{sale.customerType || 'customer'}</span></td>
                       <td className="p-3 text-gray-900 font-medium">{item?.name || <span className="text-gray-400 italic">—</span>}</td>
                       <td className="p-3">{item ? <span className={`inline-block px-2 py-0.5 rounded text-xs font-bold uppercase ${item.sellType === 'box' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}`}>{item.sellType}</span> : '—'}</td>
-                      <td className="p-3 text-gray-700 text-center">{item?.quantity ?? '—'}</td>
+                      <td className="p-3 text-gray-700 text-center">{item ? getNetItemQuantity(sale, item, saleReturns) : '—'}</td>
                       <td className="p-3 text-gray-600">{item ? formatCurrency(item.price) : '—'}</td>
-                      <td className="p-3 text-gray-800 font-medium">{item ? formatCurrency(item.total) : '—'}</td>
+                      <td className="p-3 text-gray-800 font-medium">{item ? formatCurrency(getNetItemAmount(sale, item, saleReturns)) : '—'}</td>
                       <td className="p-3 text-gray-600">{formatCurrency(getGross(sale))}</td>
                       <td className="p-3 text-red-500">{sale.discount > 0 ? `-${formatCurrency(sale.discount)}` : '—'}</td>
-                      <td className="p-3 font-bold text-gray-900">{formatCurrency(sale.total)}</td>
+                      <td className="p-3 font-bold text-gray-900">{formatCurrency(getSaleAccounting(sale, saleReturns).netTotal)}</td>
                     </tr>
                   ))}
                   {sortedExcel.length === 0 && (
@@ -656,9 +699,9 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                   <tfoot>
                     <tr className="bg-blue-50 border-t-2 border-blue-200 font-bold text-sm">
                       <td className="p-4 text-blue-800" colSpan={5}>TOTAL — {filteredSales.length} sales / {sortedExcel.length} rows</td>
-                      <td className="p-4 text-blue-800 text-center">{sortedExcel.reduce((s, { item }) => s + (item?.quantity || 0), 0)}</td>
+                      <td className="p-4 text-blue-800 text-center">{sortedExcel.reduce((s, { sale, item }) => s + getNetItemQuantity(sale, item, saleReturns), 0)}</td>
                       <td className="p-4" />
-                      <td className="p-4 text-blue-800">{formatCurrency(sortedExcel.reduce((s, { item }) => s + (item?.total || 0), 0))}</td>
+                      <td className="p-4 text-blue-800">{formatCurrency(sortedExcel.reduce((s, { sale, item }) => s + getNetItemAmount(sale, item, saleReturns), 0))}</td>
                       <td className="p-4 text-blue-800">{formatCurrency(totals.subtotal)}</td>
                       <td className="p-4 text-red-600">-{formatCurrency(totals.discount)}</td>
                       <td className="p-4 text-blue-900 text-base">{formatCurrency(totals.total)}</td>
@@ -717,14 +760,17 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
                 <div className="flex justify-between text-sm text-gray-600"><span>Gross Subtotal</span><span>{formatCurrency(getGross(selectedSale))}</span></div>
                 {(selectedSale.totalItemDiscounts || 0) > 0 && <div className="flex justify-between text-sm text-orange-600"><span>Item Discounts</span><span>-{formatCurrency(selectedSale.totalItemDiscounts)}</span></div>}
                 {(selectedSale.orderDiscount || 0) > 0 && <div className="flex justify-between text-sm text-red-500"><span>Order Discount</span><span>-{formatCurrency(selectedSale.orderDiscount)}</span></div>}
+                {getSaleAccounting(selectedSale, saleReturns).returnTotal > 0 && (
+                  <div className="flex justify-between text-sm text-red-600"><span>Sale Returns</span><span>-{formatCurrency(getSaleAccounting(selectedSale, saleReturns).returnTotal)}</span></div>
+                )}
                 <div className="pt-2 border-t border-gray-200 flex justify-between items-center">
-                  <span className="font-bold text-gray-900">Total</span>
-                  <span className="text-xl font-bold text-blue-600">{formatCurrency(selectedSale.total)}</span>
+                  <span className="font-bold text-gray-900">Net Total</span>
+                  <span className="text-xl font-bold text-blue-600">{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netTotal)}</span>
                 </div>
-                {selectedSale.pendingAmount > 0 ? (
+                {getSaleAccounting(selectedSale, saleReturns).netPending > 0 ? (
                   <>
-                    <div className="flex justify-between text-sm text-green-700"><span>Amount Paid</span><span>{formatCurrency(selectedSale.amountPaid)}</span></div>
-                    <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg border border-red-100"><span>Pending</span><span>{formatCurrency(selectedSale.pendingAmount)}</span></div>
+                    <div className="flex justify-between text-sm text-green-700"><span>Amount Paid</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPaid)}</span></div>
+                    <div className="flex justify-between text-sm font-bold text-red-700 bg-red-50 px-3 py-2 rounded-lg border border-red-100"><span>Pending</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPending)}</span></div>
                   </>
                 ) : (
                   <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">✓ Fully Paid</div>

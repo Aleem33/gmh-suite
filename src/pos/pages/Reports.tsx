@@ -4,6 +4,12 @@ import { printPageOrShare } from '../lib/nativeUtils';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
+  getItemReturnTotals,
+  getNetItemAmount,
+  getNetItemQuantity,
+  getSaleAccounting,
+} from '../lib/salesAccounting';
+import {
   format, isBefore, addDays, startOfDay, endOfDay,
   startOfWeek, endOfWeek, startOfMonth, endOfMonth,
   parseISO, isWithinInterval,
@@ -19,6 +25,7 @@ function getItemCategory(item: any): string {
 
 export function Reports() {
   const [sales, setSales]         = useState<any[]>([]);
+  const [saleReturns, setSaleReturns] = useState<any[]>([]);
   const [medicines, setMedicines] = useState<any[]>([]);
   const [expenses, setExpenses]   = useState<any[]>([]);
 
@@ -32,7 +39,8 @@ export function Reports() {
     const u1 = onSnapshot(collection(db, 'sales'),    s => setSales(s.docs.map(d => ({ id: d.id, ...d.data() }))),    e => handleFirestoreError(e, OperationType.GET, 'sales'));
     const u2 = onSnapshot(collection(db, 'medicines'),s => setMedicines(s.docs.map(d => ({ id: d.id, ...d.data() }))),e => handleFirestoreError(e, OperationType.GET, 'medicines'));
     const u3 = onSnapshot(collection(db, 'expenses'), s => setExpenses(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => handleFirestoreError(e, OperationType.GET, 'expenses'));
-    return () => { u1(); u2(); u3(); };
+    const u4 = onSnapshot(collection(db, 'saleReturns'), s => setSaleReturns(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => handleFirestoreError(e, OperationType.GET, 'saleReturns'));
+    return () => { u1(); u2(); u3(); u4(); };
   }, []);
 
   const getDateRange = (): { start: Date; end: Date } | null => {
@@ -70,16 +78,19 @@ export function Reports() {
     : approvedExpenses;
 
   const totalRevenue  = categoryFilter === 'all'
-    ? filteredSales.reduce((sum, s) => sum + (s.total || 0), 0)
-    : filteredItems.reduce((sum, row) => sum + (row.item.total || 0), 0);
+    ? filteredSales.reduce((sum, s) => sum + getSaleAccounting(s, saleReturns).netTotal, 0)
+    : filteredItems.reduce((sum, row) => sum + getNetItemAmount(row.sale, row.item, saleReturns), 0);
+  const totalReturns = categoryFilter === 'all'
+    ? filteredSales.reduce((sum, s) => sum + getSaleAccounting(s, saleReturns).returnTotal, 0)
+    : filteredItems.reduce((sum, row) => sum + getItemReturnTotals(saleReturns, row.sale.id, row.item.cartItemId).amount, 0);
   const totalExpenses = filteredExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
 
   let totalCost = 0;
-  filteredItems.forEach(({ item }) => {
+  filteredItems.forEach(({ sale, item }) => {
       const costPrice  = item.costPrice   || 0;
       const unitsPerBox = item.unitsPerBox || 1;
       const costPerUnit = costPrice / unitsPerBox;
-      const unitsSold   = item.quantity * (item.sellType === 'box' ? unitsPerBox : 1);
+      const unitsSold   = getNetItemQuantity(sale, item, saleReturns) * (item.sellType === 'box' ? unitsPerBox : 1);
       totalCost += costPerUnit * unitsSold;
   });
 
@@ -91,12 +102,12 @@ export function Reports() {
 
   const customerSales = filteredSales.filter(s => s.customerType === 'customer' || !s.customerType);
   const hospitalSales = filteredSales.filter(s => s.customerType === 'hospital');
-  const customerTotal = customerSales.reduce((sum, s) => sum + (s.total || 0), 0);
-  const hospitalTotal = hospitalSales.reduce((sum, s) => sum + (s.total || 0), 0);
+  const customerTotal = customerSales.reduce((sum, s) => sum + getSaleAccounting(s, saleReturns).netTotal, 0);
+  const hospitalTotal = hospitalSales.reduce((sum, s) => sum + getSaleAccounting(s, saleReturns).netTotal, 0);
 
   const salesByDate = filteredSales.reduce((acc: any, sale) => {
     const date = sale.date ? format(new Date(sale.date), 'MMM dd') : 'Unknown';
-    acc[date] = (acc[date] || 0) + (sale.total || 0);
+    acc[date] = (acc[date] || 0) + getSaleAccounting(sale, saleReturns).netTotal;
     return acc;
   }, {});
   const chartData = Object.keys(salesByDate).map(date => ({ date, total: salesByDate[date] }));
@@ -139,15 +150,15 @@ export function Reports() {
                 <td className="py-1">{sale.date ? format(new Date(sale.date), 'dd/MM/yyyy') : 'N/A'}</td>
                 <td className="py-1">{getItemCategory(item)}</td>
                 <td className="py-1">{item.name}</td>
-                <td className="py-1 text-right">{item.quantity || 0}</td>
-                <td className="py-1 text-right">{formatCurrency(item.total || 0)}</td>
+                <td className="py-1 text-right">{getNetItemQuantity(sale, item, saleReturns)}</td>
+                <td className="py-1 text-right">{formatCurrency(getNetItemAmount(sale, item, saleReturns))}</td>
               </tr>
             ))}
           </tbody>
           <tfoot>
             <tr className="border-t border-black font-bold">
               <td className="py-2" colSpan={3}>Total</td>
-              <td className="py-2 text-right">{filteredItems.reduce((s, row) => s + (row.item.quantity || 0), 0)}</td>
+              <td className="py-2 text-right">{filteredItems.reduce((s, row) => s + getNetItemQuantity(row.sale, row.item, saleReturns), 0)}</td>
               <td className="py-2 text-right">{formatCurrency(totalRevenue)}</td>
             </tr>
           </tfoot>
@@ -221,10 +232,11 @@ export function Reports() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <p className="text-xs md:text-sm font-medium text-gray-500">Revenue</p>
+            <p className="text-xs md:text-sm font-medium text-gray-500">Net Revenue</p>
             <TrendingUp className="w-4 h-4 text-blue-400" />
           </div>
           <p className="text-xl md:text-3xl font-bold text-gray-900">{formatCurrency(totalRevenue)}</p>
+          {totalReturns > 0 && <p className="text-xs text-red-500 mt-1">Returns -{formatCurrency(totalReturns)}</p>}
         </div>
         <div className="bg-white p-4 md:p-6 rounded-xl shadow-sm border border-gray-100">
           <div className="flex items-center justify-between mb-2">

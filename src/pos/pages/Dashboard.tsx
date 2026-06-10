@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
+import { getSaleAccounting } from '../lib/salesAccounting';
 import { DollarSign, AlertTriangle, Package, Clock, ShoppingCart } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { format, subDays, isBefore, addDays } from 'date-fns';
@@ -15,6 +16,8 @@ export function Dashboard() {
     totalStockValue: 0,
   });
   const [salesData, setSalesData] = useState<any[]>([]);
+  const [sales, setSales] = useState<any[]>([]);
+  const [saleReturns, setSaleReturns] = useState<any[]>([]);
 
   useEffect(() => {
     const unsubMedicines = onSnapshot(collection(db, 'medicines'), (snapshot) => {
@@ -37,32 +40,39 @@ export function Dashboard() {
     }, (error) => handleFirestoreError(error, OperationType.GET, 'medicines'));
 
     const unsubSales = onSnapshot(collection(db, 'sales'), (snapshot) => {
-      let todayTotal = 0;
-      const todayStr = format(new Date(), 'yyyy-MM-dd');
-
-      const last7Days = Array.from({ length: 7 }).map((_, i) => {
-        const d = subDays(new Date(), i);
-        return { date: format(d, 'MMM dd'), fullDate: format(d, 'yyyy-MM-dd'), total: 0 };
-      }).reverse();
-
-      snapshot.docs.forEach(doc => {
-        const data = doc.data();
-        const saleDateStr = data.date ? data.date.split('T')[0] : '';
-        if (saleDateStr === todayStr) todayTotal += data.total || 0;
-        const dayMatch = last7Days.find(d => d.fullDate === saleDateStr);
-        if (dayMatch) dayMatch.total += data.total || 0;
-      });
-
-      setStats(prev => ({ ...prev, todaySales: todayTotal }));
-      setSalesData(last7Days);
+      setSales(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     }, (error) => handleFirestoreError(error, OperationType.GET, 'sales'));
+    const unsubReturns = onSnapshot(collection(db, 'saleReturns'), (snapshot) => {
+      setSaleReturns(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    }, (error) => handleFirestoreError(error, OperationType.GET, 'saleReturns'));
 
-    return () => { unsubMedicines(); unsubSales(); };
+    return () => { unsubMedicines(); unsubSales(); unsubReturns(); };
   }, []);
+
+  useEffect(() => {
+    let todayTotal = 0;
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+
+    const last7Days = Array.from({ length: 7 }).map((_, i) => {
+      const d = subDays(new Date(), i);
+      return { date: format(d, 'MMM dd'), fullDate: format(d, 'yyyy-MM-dd'), total: 0 };
+    }).reverse();
+
+    sales.forEach(sale => {
+      const saleDateStr = sale.date ? sale.date.split('T')[0] : '';
+      const netTotal = getSaleAccounting(sale, saleReturns).netTotal;
+      if (saleDateStr === todayStr) todayTotal += netTotal;
+      const dayMatch = last7Days.find(d => d.fullDate === saleDateStr);
+      if (dayMatch) dayMatch.total += netTotal;
+    });
+
+    setStats(prev => ({ ...prev, todaySales: todayTotal }));
+    setSalesData(last7Days);
+  }, [sales, saleReturns]);
 
   const statCards = [
     {
-      label: "Today's Sales",
+      label: "Today's Net Sales",
       value: formatCurrency(stats.todaySales),
       icon: DollarSign,
       iconBg: 'bg-green-100',

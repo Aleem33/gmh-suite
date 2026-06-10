@@ -217,12 +217,22 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
         unitsPerBox: i.unitsPerBox || 1,
         refundAmount: (i.total / i.quantity) * orderDiscountRatio * i.returnQty,
       }));
+      const currentPending = Number(selectedSale.pendingAmount || 0);
+      const currentPaid = selectedSale.amountPaid == null ? Number(selectedSale.total || 0) : Number(selectedSale.amountPaid || 0);
+      const pendingReduction = Math.min(currentPending, returnTotal);
+      const refundableAmount = Math.max(0, returnTotal - pendingReduction);
+      const nextPending = Math.max(0, currentPending - pendingReduction);
+      const nextPaid = Math.max(0, currentPaid - refundableAmount);
 
       const returnDoc = {
         originalSaleId: selectedSale.id,
         originalDate: selectedSale.date,
+        customerId: selectedSale.customerId || '',
+        customerName: selectedSale.customerName || '',
         items: itemsToReturn,
         totalRefund: returnTotal,
+        pendingReduction,
+        refundableAmount,
         reason: returnReason,
         date: new Date().toISOString(),
         processedBy: auth.currentUser?.uid,
@@ -234,6 +244,17 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
         const unitsToRestore = item.returnQty * (item.sellType === 'box' ? item.unitsPerBox : 1);
         await updateDoc(doc(db, 'medicines', item.medicineId), {
           stock: increment(unitsToRestore),
+        });
+      }
+      await updateDoc(doc(db, 'sales', selectedSale.id), {
+        pendingAmount: nextPending,
+        amountPaid: nextPaid,
+        returnedAmount: increment(returnTotal),
+        lastReturnedAt: new Date().toISOString(),
+      });
+      if (selectedSale.customerId && pendingReduction > 0) {
+        await updateDoc(doc(db, 'customers', selectedSale.customerId), {
+          creditBalance: increment(-pendingReduction),
         });
       }
 

@@ -6,6 +6,7 @@ import { Users, CalendarDays, BedDouble, FlaskConical, DollarSign, AlertTriangle
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { format, subDays } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
+import { getSaleAccounting } from '../../pos/lib/salesAccounting';
 
 export function Dashboard() {
   const navigate = useNavigate();
@@ -14,6 +15,9 @@ export function Dashboard() {
     todayRevenue: 0, todayPosRevenue: 0, lowStock: 0, expiringMeds: 0, totalPatients: 0,
   });
   const [chartData, setChartData]       = useState<any[]>([]);
+  const [bills, setBills] = useState<any[]>([]);
+  const [posSales, setPosSales] = useState<any[]>([]);
+  const [saleReturns, setSaleReturns] = useState<any[]>([]);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [lowStockItems, setLowStockItems]   = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,46 +49,53 @@ export function Dashboard() {
     });
     const u6 = onSnapshot(collection(db, 'bills'), snap => {
       const bills = snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[];
+      setBills(bills);
       const todayRev = bills.filter(b => (b.date || '').startsWith(todayStr)).reduce((s, b) => s + (b.paid || 0), 0);
       setStats(p => ({ ...p, todayRevenue: todayRev }));
-      const days = Array.from({ length: 7 }, (_, i) => {
-        const d = subDays(new Date(), 6 - i);
-        return { date: format(d, 'EEE'), fullDate: format(d, 'yyyy-MM-dd'), opd: 0, pos: 0 };
-      });
-      bills.forEach(b => {
-        const bd = (b.date || '').split('T')[0];
-        const day = days.find(d => d.fullDate === bd);
-        if (day) day.opd += b.total || 0;
-      });
-      setChartData(days);
       setLoading(false);
     });
     const u7 = onSnapshot(collection(db, 'sales'), snap => {
-      const sales = snap.docs.map(d => d.data()) as any[];
-      const todayPos = sales.filter(s => (s.date || '').startsWith(todayStr)).reduce((s, p) => s + (p.total || 0), 0);
-      setStats(p => ({ ...p, todayPosRevenue: todayPos }));
-      setChartData(prev => {
-        const updated = [...prev];
-        sales.forEach(s => {
-          const sd = (s.date || '').split('T')[0];
-          const day = updated.find(d => d.fullDate === sd);
-          if (day) day.pos += s.total || 0;
-        });
-        return updated;
-      });
+      setPosSales(snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]);
     });
     const u8 = onSnapshot(query(collection(db, 'auditLogs'), orderBy('createdAt', 'desc'), limit(8)),
       snap => setRecentActivity(snap.docs.map(d => ({ id: d.id, ...d.data() })))
     );
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); };
+    const u9 = onSnapshot(collection(db, 'saleReturns'), snap => {
+      setSaleReturns(snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]);
+    });
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); u9(); };
   }, []);
+
+  useEffect(() => {
+    const todayStr = today();
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const d = subDays(new Date(), 6 - i);
+      return { date: format(d, 'EEE'), fullDate: format(d, 'yyyy-MM-dd'), opd: 0, pos: 0 };
+    });
+    bills.forEach(b => {
+      const bd = (b.date || '').split('T')[0];
+      const day = days.find(d => d.fullDate === bd);
+      if (day) day.opd += b.total || 0;
+    });
+    posSales.forEach(sale => {
+      const sd = (sale.date || '').split('T')[0];
+      const netTotal = getSaleAccounting(sale, saleReturns).netTotal;
+      const day = days.find(d => d.fullDate === sd);
+      if (day) day.pos += netTotal;
+    });
+    const todayPos = posSales
+      .filter(s => (s.date || '').startsWith(todayStr))
+      .reduce((sum, sale) => sum + getSaleAccounting(sale, saleReturns).netTotal, 0);
+    setStats(p => ({ ...p, todayPosRevenue: todayPos }));
+    setChartData(days);
+  }, [bills, posSales, saleReturns]);
 
   const statCards = [
     { label: "Today's Appointments",  value: stats.todayAppointments,                    icon: CalendarDays, color: 'blue',   path: '/appointments' },
     { label: 'Total Patients',        value: stats.totalPatients,                         icon: Users,        color: 'violet', path: '/patients' },
     { label: 'Active IPD',            value: stats.ipdCount,                              icon: BedDouble,    color: 'emerald',path: '/ipd' },
     { label: "OPD Revenue Today",     value: formatCurrency(stats.todayRevenue),          icon: DollarSign,   color: 'green',  path: '/billing' },
-    { label: "POS Revenue Today",     value: formatCurrency(stats.todayPosRevenue),       icon: ShoppingCart, color: 'teal',   path: '/pharmacy/sales' },
+    { label: "POS Net Revenue Today", value: formatCurrency(stats.todayPosRevenue),       icon: ShoppingCart, color: 'teal',   path: '/pharmacy/sales' },
     { label: 'Pending Lab Tests',     value: stats.pendingLab,                            icon: FlaskConical, color: 'orange', path: '/lab' },
     { label: 'Low Stock Medicines',   value: stats.lowStock,                              icon: AlertTriangle,color: 'red',    path: '/pharmacy/medicines' },
     { label: 'Expiring (30 days)',    value: stats.expiringMeds,                          icon: Package,      color: 'pink',   path: '/reports' },

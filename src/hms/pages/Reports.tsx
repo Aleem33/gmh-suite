@@ -5,6 +5,7 @@ import { formatCurrency, formatDate } from '../lib/utils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 import { format, subDays, subMonths, startOfMonth, endOfMonth, differenceInDays, parseISO } from 'date-fns';
 import { Download, TrendingUp, AlertCircle, DollarSign, Activity } from 'lucide-react';
+import { getSaleAccounting } from '../../pos/lib/salesAccounting';
 
 function exportCSV(filename: string, rows: any[][], headers: string[]) {
   const lines = [headers, ...rows].map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','));
@@ -43,6 +44,7 @@ export function Reports() {
   const [expenses, setExpenses] = useState<any[]>([]);
   const [medicines, setMedicines] = useState<any[]>([]);
   const [posSales, setPosSales] = useState<any[]>([]);
+  const [saleReturns, setSaleReturns] = useState<any[]>([]);
   const [period, setPeriod] = useState<'7d' | '30d' | '3m'>('30d');
   const [outstandingSearch, setOutstandingSearch] = useState('');
 
@@ -55,7 +57,8 @@ export function Reports() {
       onSnapshot(collection(db, 'labOrders'),      s => setLabOrders(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, 'expenses'),       s => setExpenses(s.docs.map(d => ({ id: d.id, ...d.data() })))),
       onSnapshot(collection(db, 'medicines'),      s => setMedicines(s.docs.map(d => ({ id: d.id, ...d.data() })))),
-      onSnapshot(collection(db, 'posSales'),       s => setPosSales(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+      onSnapshot(collection(db, 'sales'),          s => setPosSales(s.docs.map(d => ({ id: d.id, ...d.data() })))),
+      onSnapshot(collection(db, 'saleReturns'),    s => setSaleReturns(s.docs.map(d => ({ id: d.id, ...d.data() })))),
     ];
     return () => u.forEach(f => f());
   }, []);
@@ -63,7 +66,8 @@ export function Reports() {
   // ── Computed values ──────────────────────────────────────────────────────────
   const totalOpdRevenue  = bills.reduce((s, b) => s + (b.total || 0), 0);
   const totalOpdCollected = bills.reduce((s, b) => s + (b.paid || 0), 0);
-  const totalPosRevenue  = posSales.reduce((s, p) => s + (p.total || 0), 0);
+  const totalPosReturns  = posSales.reduce((s, p) => s + getSaleAccounting(p, saleReturns).returnTotal, 0);
+  const totalPosRevenue  = posSales.reduce((s, p) => s + getSaleAccounting(p, saleReturns).netTotal, 0);
   const totalRevenue     = totalOpdRevenue + totalPosRevenue;
   const approvedExpenses = expenses.filter(e => (e.status || 'approved') === 'approved');
   const totalExpenses    = approvedExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
@@ -77,7 +81,7 @@ export function Reports() {
     const d = subDays(new Date(), (Math.min(days, 30) - 1) - i);
     const dateStr = format(d, 'yyyy-MM-dd');
     const opd     = bills.filter(b => (b.date || '').startsWith(dateStr)).reduce((s, b) => s + (b.total || 0), 0);
-    const pos     = posSales.filter(p => (p.date || '').startsWith(dateStr)).reduce((s, p) => s + (p.total || 0), 0);
+    const pos     = posSales.filter(p => (p.date || '').startsWith(dateStr)).reduce((s, p) => s + getSaleAccounting(p, saleReturns).netTotal, 0);
     const exp     = approvedExpenses.filter(e => (e.date || '').startsWith(dateStr)).reduce((s, e) => s + (Number(e.amount) || 0), 0);
     return { date: format(d, 'MMM dd'), opd, pos, total: opd + pos, expenses: exp };
   });
@@ -88,7 +92,7 @@ export function Reports() {
     const start = format(startOfMonth(d), 'yyyy-MM-dd');
     const end   = format(endOfMonth(d), 'yyyy-MM-dd');
     const opd   = bills.filter(b => b.date >= start && b.date <= end).reduce((s, b) => s + (b.total || 0), 0);
-    const pos   = posSales.filter(p => p.date >= start && p.date <= end).reduce((s, p) => s + (p.total || 0), 0);
+    const pos   = posSales.filter(p => p.date >= start && p.date <= end).reduce((s, p) => s + getSaleAccounting(p, saleReturns).netTotal, 0);
     const exp   = approvedExpenses.filter(e => e.date >= start && e.date <= end).reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const revenue = opd + pos;
     return { month: format(d, 'MMM yy'), revenue, expenses: exp, profit: revenue - exp };
@@ -178,7 +182,7 @@ export function Reports() {
       {tab === 'overview' && (<>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="OPD Revenue"      value={formatCurrency(totalOpdRevenue)}  color="text-blue-700"  icon={DollarSign} />
-          <StatCard label="POS Revenue"      value={formatCurrency(totalPosRevenue)}  color="text-emerald-700" icon={TrendingUp} />
+          <StatCard label="POS Net Revenue"  value={formatCurrency(totalPosRevenue)}  sub={totalPosReturns > 0 ? `Returns -${formatCurrency(totalPosReturns)}` : ''} color="text-emerald-700" icon={TrendingUp} />
           <StatCard label="Total Collected"  value={formatCurrency(totalOpdCollected)} color="text-green-700" icon={Activity} />
           <StatCard label="Outstanding"      value={formatCurrency(totalPending)}      color="text-red-500"   icon={AlertCircle} />
         </div>

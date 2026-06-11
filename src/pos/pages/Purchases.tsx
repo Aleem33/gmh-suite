@@ -86,10 +86,28 @@ export function Purchases({ userProfile }: PurchasesProps) {
     if (r.originalPurchaseId) return filteredPurchaseIds.has(r.originalPurchaseId);
     return inDateRange(r.date);
   });
+  const getPurchaseCost = (purchase: any) => {
+    const savedTotal = Number(purchase.totalCost);
+    if (Number.isFinite(savedTotal) && savedTotal > 0) return savedTotal;
+    const unitsPerBox = Number(purchase.unitsPerBox) || 1;
+    const boxes = Number(purchase.boxesPurchased ?? purchase.boxes) || 0;
+    const loose = Number(purchase.looseUnitsPurchased ?? purchase.looseUnits) || 0;
+    const costPerBox = Number(purchase.costPrice ?? purchase.costPerBox) || 0;
+    const costPerUnit = Number(purchase.costPricePerUnit) || (unitsPerBox > 0 ? costPerBox / unitsPerBox : costPerBox);
+    return (boxes * costPerBox) + (loose * costPerUnit);
+  };
+  const getPurchaseUnits = (purchase: any) => {
+    const savedUnits = Number(purchase.totalUnitsAdded);
+    if (Number.isFinite(savedUnits) && savedUnits > 0) return savedUnits;
+    const unitsPerBox = Number(purchase.unitsPerBox) || 1;
+    const boxes = Number(purchase.boxesPurchased ?? purchase.boxes) || 0;
+    const loose = Number(purchase.looseUnitsPurchased ?? purchase.looseUnits) || 0;
+    return (boxes * unitsPerBox) + loose;
+  };
   const purchaseTotals = {
-    grossCost: filteredPurchases.reduce((sum, p) => sum + (Number(p.totalCost) || 0), 0),
+    grossCost: filteredPurchases.reduce((sum, p) => sum + getPurchaseCost(p), 0),
     returnedValue: filteredReturns.reduce((sum, r) => sum + (Number(r.refundAmount) || 0), 0),
-    unitsAdded: filteredPurchases.reduce((sum, p) => sum + (Number(p.totalUnitsAdded) || 0), 0),
+    unitsAdded: filteredPurchases.reduce((sum, p) => sum + getPurchaseUnits(p), 0),
     unitsReturned: filteredReturns.reduce((sum, r) => sum + (Number(r.totalUnitsReturned) || 0), 0),
     purchaseCount: filteredPurchases.length,
     supplierCount: new Set(filteredPurchases.map(p => p.supplierId || p.supplierName).filter(Boolean)).size,
@@ -135,15 +153,28 @@ export function Purchases({ userProfile }: PurchasesProps) {
       const looseBought  = parseInt(formData.looseUnitsPurchased || '0');
       const totalUnits   = (boxesBought * unitsPerBox) + looseBought;
       const supplier     = suppliers.find(s => s.id === formData.supplierId);
-      const totalCost    = parseFloat(formData.costPrice || '0') * boxesBought;
+      const costPrice    = parseFloat(formData.costPrice || '0');
+      const costPricePerUnit = unitsPerBox > 1 ? costPrice / unitsPerBox : costPrice;
+      const totalCost    = (boxesBought * costPrice) + (looseBought * costPricePerUnit);
+
+      if (totalUnits <= 0) {
+        alert('Enter at least one box or loose unit.');
+        return;
+      }
+      if (!Number.isFinite(costPrice) || costPrice <= 0) {
+        alert('Enter a valid cost price per box.');
+        return;
+      }
 
       await addDoc(collection(db, 'purchases'), {
         medicineId: selectedMedicine.id, medicineName: selectedMedicine.name,
         supplierId: formData.supplierId || null, supplierName: supplier?.name || 'N/A',
         boxesPurchased: boxesBought, looseUnitsPurchased: looseBought,
+        boxes: boxesBought, looseUnits: looseBought,
         totalUnitsAdded: totalUnits, unitsPerBox,
-        costPrice: parseFloat(formData.costPrice || '0'),
-        costPricePerUnit: unitsPerBox > 1 ? parseFloat(formData.costPrice || '0') / unitsPerBox : parseFloat(formData.costPrice || '0'),
+        costPrice,
+        costPerBox: costPrice,
+        costPricePerUnit,
         retailPrice: parseFloat(formData.retailPrice || '0'),
         unitPrice: parseFloat(formData.unitPrice || '0'),
         batchNo: formData.batchNo, expiryDate: formData.expiryDate,
@@ -152,7 +183,7 @@ export function Purchases({ userProfile }: PurchasesProps) {
       });
       await updateDoc(doc(db, 'medicines', selectedMedicine.id), {
         stock: increment(totalUnits),
-        costPrice: parseFloat(formData.costPrice || '0'),
+        costPrice,
         retailPrice: parseFloat(formData.retailPrice || '0'),
         unitPrice: parseFloat(formData.unitPrice || '0'),
         batchNo: formData.batchNo, expiryDate: formData.expiryDate,
@@ -297,7 +328,7 @@ export function Purchases({ userProfile }: PurchasesProps) {
                   <p className="font-semibold text-gray-900">{p.medicineName}</p>
                   <p className="text-xs text-gray-400">{p.date ? format(new Date(p.date), 'MMM dd, yyyy') : 'N/A'}</p>
                 </div>
-                <span className="text-sm font-bold text-gray-900 shrink-0">{formatCurrency(p.totalCost)}</span>
+                <span className="text-sm font-bold text-gray-900 shrink-0">{formatCurrency(getPurchaseCost(p))}</span>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
                 <span className="flex items-center gap-1 text-gray-500">
@@ -352,7 +383,7 @@ export function Purchases({ userProfile }: PurchasesProps) {
                     </p>
                   </td>
                   <td className="p-4 text-gray-600">{formatCurrency(p.costPrice)}</td>
-                  <td className="p-4 font-medium text-gray-900">{formatCurrency(p.totalCost)}</td>
+                  <td className="p-4 font-medium text-gray-900">{formatCurrency(getPurchaseCost(p))}</td>
                 </tr>
               ))}
               {filteredPurchases.length === 0 && (
@@ -443,8 +474,8 @@ export function Purchases({ userProfile }: PurchasesProps) {
               {/* Quantity */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Boxes <span className="text-red-500">*</span></label>
-                  <input required type="number" min="0" value={formData.boxesPurchased}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Boxes</label>
+                  <input type="number" min="0" value={formData.boxesPurchased}
                     onChange={e => setFormData({ ...formData, boxesPurchased: e.target.value })}
                     placeholder="e.g. 10"
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
@@ -463,8 +494,8 @@ export function Purchases({ userProfile }: PurchasesProps) {
               {/* Prices */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost Price/Box</label>
-                  <input type="number" step="0.01" min="0" value={formData.costPrice}
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Cost Price/Box <span className="text-red-500">*</span></label>
+                  <input required type="number" step="0.01" min="0" value={formData.costPrice}
                     onChange={e => setFormData({ ...formData, costPrice: e.target.value })}
                     className="w-full p-2.5 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500" />
                 </div>
@@ -513,7 +544,7 @@ export function Purchases({ userProfile }: PurchasesProps) {
               </div>
 
               {/* Preview */}
-              {selectedMedicine && formData.boxesPurchased && (
+              {selectedMedicine && (formData.boxesPurchased || formData.looseUnitsPurchased) && (
                 <div className="bg-green-50 border border-green-100 rounded-lg p-3">
                   <p className="text-sm font-medium text-green-800">Preview:</p>
                   <p className="text-sm text-green-700 mt-1">

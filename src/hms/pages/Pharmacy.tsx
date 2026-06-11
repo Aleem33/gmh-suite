@@ -19,6 +19,17 @@ const DUR_MAP: Record<string, number> = {
   '1 month': 30, 'ongoing': 30,
 };
 
+function getPurchaseCost(purchase: any): number {
+  const savedTotal = Number(purchase.totalCost);
+  if (Number.isFinite(savedTotal) && savedTotal > 0) return savedTotal;
+  const unitsPerBox = Number(purchase.unitsPerBox) || 1;
+  const boxes = Number(purchase.boxesPurchased ?? purchase.boxes) || 0;
+  const loose = Number(purchase.looseUnitsPurchased ?? purchase.looseUnits) || 0;
+  const costPerBox = Number(purchase.costPrice ?? purchase.costPerBox) || 0;
+  const costPerUnit = Number(purchase.costPricePerUnit) || (unitsPerBox > 0 ? costPerBox / unitsPerBox : costPerBox);
+  return (boxes * costPerBox) + (loose * costPerUnit);
+}
+
 function parseFrequency(freq: string): number {
   if (!freq) return 1;
   const key = freq.trim().toLowerCase();
@@ -198,14 +209,38 @@ export function Pharmacy() {
   };
 
   const handleSavePurchase = async () => {
-    if (!purchaseForm.medicineId || !purchaseForm.boxes) { setError('Medicine and boxes are required.'); return; }
+    if (!purchaseForm.medicineId) { setError('Medicine is required.'); return; }
     setSaving(true); setError('');
     try {
       const med = medicines.find(m => m.id === purchaseForm.medicineId)!;
-      const unitsAdded = parseInt(purchaseForm.boxes) * (med.unitsPerBox || 1);
-      const totalCost  = parseFloat(purchaseForm.costPerBox || '0') * parseInt(purchaseForm.boxes);
-      await addDoc(collection(db, 'purchases'), { ...purchaseForm, boxes: parseInt(purchaseForm.boxes), unitsAdded, totalCost, costPerBox: parseFloat(purchaseForm.costPerBox || '0'), createdAt: nowISO() });
-      await updateDoc(doc(db, 'medicines', purchaseForm.medicineId), { stock: increment(unitsAdded), batchNo: purchaseForm.batchNo || med.batchNo, expiryDate: purchaseForm.expiryDate || med.expiryDate, updatedAt: nowISO() });
+      const unitsPerBox = Number(med.unitsPerBox) || 1;
+      const boxesPurchased = parseInt(purchaseForm.boxes || '0');
+      const looseUnitsPurchased = 0;
+      const totalUnitsAdded = (boxesPurchased * unitsPerBox) + looseUnitsPurchased;
+      const costPrice = parseFloat(purchaseForm.costPerBox || '0');
+      const costPricePerUnit = unitsPerBox > 1 ? costPrice / unitsPerBox : costPrice;
+      const totalCost = (boxesPurchased * costPrice) + (looseUnitsPurchased * costPricePerUnit);
+
+      if (totalUnitsAdded <= 0) { setError('Enter at least one box.'); return; }
+      if (!Number.isFinite(costPrice) || costPrice <= 0) { setError('Enter a valid cost per box.'); return; }
+
+      await addDoc(collection(db, 'purchases'), {
+        ...purchaseForm,
+        boxes: boxesPurchased,
+        boxesPurchased,
+        looseUnits: looseUnitsPurchased,
+        looseUnitsPurchased,
+        unitsAdded: totalUnitsAdded,
+        totalUnitsAdded,
+        unitsPerBox,
+        costPerBox: costPrice,
+        costPrice,
+        costPricePerUnit,
+        totalCost,
+        date: purchaseForm.date || nowISO(),
+        createdAt: nowISO(),
+      });
+      await updateDoc(doc(db, 'medicines', purchaseForm.medicineId), { stock: increment(totalUnitsAdded), batchNo: purchaseForm.batchNo || med.batchNo, expiryDate: purchaseForm.expiryDate || med.expiryDate, updatedAt: nowISO() });
       setShowPurchaseModal(false);
       setPurchaseForm({ medicineId: '', medicineName: '', supplierId: '', supplierName: '', boxes: '', costPerBox: '', batchNo: '', expiryDate: today(), invoiceNo: '', date: today() });
     } catch (e: any) { setError(e.message); }
@@ -339,7 +374,7 @@ export function Pharmacy() {
                     <td className="px-4 py-3 text-sm text-gray-600">{p.supplierName || '—'}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{p.boxes}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">Rs. {p.costPerBox}</td>
-                    <td className="px-4 py-3 text-sm font-medium text-gray-800">Rs. {p.totalCost?.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-800">Rs. {getPurchaseCost(p).toLocaleString()}</td>
                     <td className="px-4 py-3 text-xs text-gray-400">{p.invoiceNo || '—'}</td>
                     <td className="px-4 py-3 text-xs font-mono text-gray-400">{p.batchNo || '—'}</td>
                   </tr>
@@ -618,7 +653,7 @@ export function Pharmacy() {
                 {[
                   { label: 'Purchase Date', key: 'date', type: 'date' },
                   { label: 'Boxes Purchased *', key: 'boxes', type: 'number' },
-                  { label: 'Cost Per Box (Rs.)', key: 'costPerBox', type: 'number' },
+                  { label: 'Cost Per Box (Rs.) *', key: 'costPerBox', type: 'number' },
                   { label: 'Batch No.', key: 'batchNo', type: 'text' },
                   { label: 'Expiry Date', key: 'expiryDate', type: 'date' },
                   { label: 'Invoice No.', key: 'invoiceNo', type: 'text' },

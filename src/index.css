@@ -6,6 +6,22 @@
 
 * { font-family: 'DM Sans', sans-serif; }
 
+:root {
+  --app-safe-top: env(safe-area-inset-top, 0px);
+  --app-safe-bottom: env(safe-area-inset-bottom, 0px);
+  --app-mobile-header-height: calc(3.5rem + var(--app-safe-top));
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  background: #f1f5f9;
+}
+
 /* Urdu text utility */
 .font-urdu {
   font-family: 'Noto Nastaliq Urdu', serif !important;
@@ -31,17 +47,21 @@
   #root {
     width: 100%;
     max-width: 100%;
+    min-height: 100dvh;
     overflow-x: hidden;
   }
 
   body {
     overscroll-behavior-y: none;
     -webkit-text-size-adjust: 100%;
+    padding-top: 0;
   }
 
   .hms-shell,
   .pos-shell {
+    height: 100dvh !important;
     min-height: 100dvh;
+    max-height: 100dvh;
   }
 
   input,
@@ -71,7 +91,7 @@
   .hms-shell main > div,
   .pos-shell main > div {
     padding: 0.875rem !important;
-    padding-bottom: calc(env(safe-area-inset-bottom) + 1rem) !important;
+    padding-bottom: calc(var(--app-safe-bottom) + 1rem) !important;
   }
 
   .hms-shell .grid.grid-cols-2,
@@ -155,8 +175,8 @@
   .pos-shell .fixed.inset-0 {
     align-items: flex-end;
     padding: 0.5rem !important;
-    padding-top: calc(env(safe-area-inset-top) + 0.5rem) !important;
-    padding-bottom: calc(env(safe-area-inset-bottom) + 0.5rem) !important;
+    padding-top: calc(var(--app-safe-top) + 0.5rem) !important;
+    padding-bottom: calc(var(--app-safe-bottom) + 0.5rem) !important;
   }
 
   .hms-shell .fixed.inset-0 > .bg-white,
@@ -170,7 +190,7 @@
 
   .hms-shell .sticky.top-0,
   .pos-shell .sticky.top-0 {
-    top: env(safe-area-inset-top);
+    top: var(--app-safe-top);
   }
 
   .hms-shell .text-2xl,

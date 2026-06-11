@@ -270,7 +270,7 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
         >
           <div
             className="flex items-center justify-between px-4 border-b border-slate-100 bg-[#0f2544] shrink-0"
-            style={{ paddingTop: 'env(safe-area-inset-top)', height: 'calc(58px + env(safe-area-inset-top))' }}
+            style={{ paddingTop: 'var(--app-safe-top)', height: 'calc(58px + var(--app-safe-top))' }}
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <img src={logoUrl} alt="GMH Suite" className="w-8 h-8 object-contain shrink-0" />
@@ -290,7 +290,7 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
 
           <div
             className="p-3 border-t border-slate-100 shrink-0"
-            style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 0.75rem)' }}
+            style={{ paddingBottom: 'calc(var(--app-safe-bottom) + 0.75rem)' }}
           >
             <BottomActions mobile onNavigate={() => setDrawerOpen(false)} />
           </div>

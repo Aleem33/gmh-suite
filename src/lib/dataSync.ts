@@ -100,7 +100,7 @@ export async function deleteAllAppData(onProgress?: ProgressFn) {
 export function summarizeBackup(backup: Pick<BackupFile, 'collections'>) {
   if (!backup?.collections) return 'No records found.';
   const summary = getRestoreCollections(backup.collections)
-    .filter(name => backup.collections[name]?.length > 0)
+    .filter(name => name === 'quotations' || backup.collections[name]?.length > 0)
     .map(name => `${backup.collections[name].length} ${name}`)
     .join(', ');
   return summary || 'No records found.';

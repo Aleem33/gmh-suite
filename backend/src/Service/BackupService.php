@@ -89,6 +89,10 @@ final class BackupService
             }
         }
 
+        if (!array_key_exists('quotations', $backup['collections'])) {
+            $warnings[] = 'This legacy backup has no quotations collection. Existing MySQL quotations will remain unchanged during a merge restore.';
+        }
+
         $this->validateRelationships($normalized, $ids, $warnings);
         $collectionRecords = [];
         foreach ($normalized as $collection => $records) {

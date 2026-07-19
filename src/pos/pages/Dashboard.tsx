@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot } from '../../lib/firestoreCompat';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import { getSaleAccounting } from '../lib/salesAccounting';

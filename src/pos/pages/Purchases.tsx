@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, doc, updateDoc, increment } from 'firebase/firestore';
+import { collection, doc, onSnapshot, runTransaction } from '../../lib/firestoreCompat';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import { Plus, Search, Truck, PackagePlus, X, ChevronDown, CheckCircle, CalendarDays, RotateCcw, TrendingDown } from 'lucide-react';
@@ -166,27 +166,46 @@ export function Purchases({ userProfile }: PurchasesProps) {
         return;
       }
 
-      await addDoc(collection(db, 'purchases'), {
-        medicineId: selectedMedicine.id, medicineName: selectedMedicine.name,
-        supplierId: formData.supplierId || null, supplierName: supplier?.name || 'N/A',
-        boxesPurchased: boxesBought, looseUnitsPurchased: looseBought,
-        boxes: boxesBought, looseUnits: looseBought,
-        totalUnitsAdded: totalUnits, unitsPerBox,
-        costPrice,
-        costPerBox: costPrice,
-        costPricePerUnit,
-        retailPrice: parseFloat(formData.retailPrice || '0'),
-        unitPrice: parseFloat(formData.unitPrice || '0'),
-        batchNo: formData.batchNo, expiryDate: formData.expiryDate,
-        notes: formData.notes, totalCost, date: new Date().toISOString(),
-        addedBy: auth.currentUser?.uid || 'unknown',
-      });
-      await updateDoc(doc(db, 'medicines', selectedMedicine.id), {
-        stock: increment(totalUnits),
-        costPrice,
-        retailPrice: parseFloat(formData.retailPrice || '0'),
-        unitPrice: parseFloat(formData.unitPrice || '0'),
-        batchNo: formData.batchNo, expiryDate: formData.expiryDate,
+      const medicineRef = doc(db, 'medicines', selectedMedicine.id);
+      const purchaseRef = doc(collection(db, 'purchases'));
+      const appliedAt = new Date().toISOString();
+      const appliedBy = auth.currentUser?.uid || 'unknown';
+      const retailPrice = parseFloat(formData.retailPrice || '0');
+      const unitPrice = parseFloat(formData.unitPrice || '0');
+
+      await runTransaction(db, async tx => {
+        const medicineSnap = await tx.get(medicineRef);
+        if (!medicineSnap.exists()) throw new Error('The selected medicine no longer exists.');
+        const stockBefore = Number(medicineSnap.data().stock || 0);
+        const stockAfter = stockBefore + totalUnits;
+
+        tx.set(purchaseRef, {
+          medicineId: selectedMedicine.id, medicineName: selectedMedicine.name,
+          supplierId: formData.supplierId || null, supplierName: supplier?.name || 'N/A',
+          boxesPurchased: boxesBought, looseUnitsPurchased: looseBought,
+          boxes: boxesBought, looseUnits: looseBought,
+          totalUnitsAdded: totalUnits, unitsPerBox,
+          costPrice,
+          costPerBox: costPrice,
+          costPricePerUnit,
+          retailPrice,
+          unitPrice,
+          batchNo: formData.batchNo, expiryDate: formData.expiryDate,
+          notes: formData.notes, totalCost, date: appliedAt,
+          addedBy: appliedBy,
+          stockBefore,
+          stockAfter,
+          stockAppliedAt: appliedAt,
+          appliedBy,
+          source: 'pos_purchases',
+        });
+        tx.update(medicineRef, {
+          stock: stockAfter,
+          costPrice,
+          retailPrice,
+          unitPrice,
+          batchNo: formData.batchNo, expiryDate: formData.expiryDate,
+        });
       });
 
       setIsModalOpen(false); setSelectedMedicine(null); setMedSearch('');

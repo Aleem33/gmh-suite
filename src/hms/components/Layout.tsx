@@ -8,7 +8,7 @@ import {
   TrendingDown, ClipboardList, ChevronLeft, ChevronRight,
   Shield, CalendarCheck, Hotel, Monitor, BookOpen, Activity,
   X, ShoppingCart, PackagePlus, RotateCcw, History,
-  Lock, ClipboardCheck,
+  Lock, ClipboardCheck, FileText,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
@@ -58,6 +58,7 @@ const PHARMACY_NAV = [
   { to: '/pharmacy/dashboard',        icon: LayoutDashboard, label: 'Dashboard',         roles: ['admin','pharmacist','cashier'], permissions: WORKFLOW_PERMISSIONS.posDashboardView },
   { to: '/pharmacy/orders',           icon: Pill,         label: 'Orders / Dispense', roles: ['admin','pharmacist'] },
   { to: '/pharmacy/billing',          icon: ShoppingCart, label: 'Billing',           roles: ['admin','cashier'], permissions: WORKFLOW_PERMISSIONS.posBillingCreate },
+  { to: '/pharmacy/quotations',       icon: FileText,     label: 'Quotations',        roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posQuotationsView },
   { to: '/pharmacy/patient-history',  icon: ClipboardList,label: 'Patient Rx',        roles: ['admin','pharmacist','cashier'] },
   { to: '/pharmacy/medicines',        icon: Pill,         label: 'Medicines',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posMedicinesView },
   { to: '/pharmacy/purchases',        icon: PackagePlus,  label: 'Purchases',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posPurchasesView },
@@ -68,6 +69,7 @@ const PHARMACY_NAV = [
   { to: '/pharmacy/suppliers',        icon: Truck,        label: 'Suppliers',         roles: ['admin','pharmacist'], permissions: WORKFLOW_PERMISSIONS.posSuppliersView },
   { to: '/pharmacy/expenses',         icon: Receipt,      label: 'Expenses',          roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posExpensesView },
   { to: '/pharmacy/reports',          icon: BarChart3,    label: 'Reports',           roles: ['admin'], permissions: WORKFLOW_PERMISSIONS.posReportsView },
+  { to: '/pharmacy/audit',            icon: Shield,       label: 'Audit',             roles: ['admin'] },
   { to: '/pharmacy/users',            icon: UserCog,      label: 'Users',             roles: ['admin'] },
   { to: '/pharmacy/settings',         icon: SettingsIcon, label: 'Settings',          roles: ['admin'] },
 ];
@@ -89,7 +91,9 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
   const hmsAccess = canAccessApp(userProfile || { role }, 'hms');
   const posAccess = canAccessApp(userProfile || { role }, 'pos');
   const visiblePharmacy = posAccess
-    ? PHARMACY_NAV.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
+    ? PHARMACY_NAV.filter(i => (
+      i.to === '/pharmacy/quotations' && userProfile?.username === 'haseeb'
+    ) || roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
     : [];
   const pharmacyActive = location.pathname.startsWith('/pharmacy');
 
@@ -104,17 +108,12 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
       // Don't fire when typing in input/textarea/select
       if (['INPUT','TEXTAREA','SELECT'].includes(tag)) return;
 
-      if (e.ctrlKey || e.metaKey) {
-        switch (e.key) {
-          case 'p': e.preventDefault(); window.print(); break;
-        }
-      } else {
-        switch (e.key) {
-          case 'Escape': {
-            // Close any open modal by dispatching a custom event
-            document.dispatchEvent(new CustomEvent('closeModal'));
-            break;
-          }
+      if (e.ctrlKey || e.metaKey) return;
+      switch (e.key) {
+        case 'Escape': {
+          // Close any open modal by dispatching a custom event
+          document.dispatchEvent(new CustomEvent('closeModal'));
+          break;
         }
       }
     };
@@ -126,7 +125,9 @@ export function Layout({ role, userProfile, userEmail, onLogout }: Props) {
     <>
       {NAV.map(({ group, items }) => {
         const visible = hmsAccess
-          ? items.filter(i => roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
+          ? items.filter(i => (
+            i.to === '/ipd' && ['haseeb', 'sohail', 'haider'].includes(userProfile?.username || '')
+          ) || roleOrPermission(role, i.roles, userProfile, (i as any).permissions || (i as any).permission || []))
           : [];
         if (!visible.length && !(group === 'Services' && visiblePharmacy.length)) return null;
         return (

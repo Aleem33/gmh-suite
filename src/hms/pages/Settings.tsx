@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
-import { db, registerUser, usernameToEmail } from '../../firebase';
+import { collection, doc, getDoc, getDocs, query, runTransaction, setDoc, where } from '../../lib/firestoreCompat';
+import { auth, db, registerUser, usernameToEmail } from '../../firebase';
 import { nowISO } from '../lib/utils';
 import { Building2, Download, Upload, Trash2, AlertTriangle, UserPlus, X, Lock, Eye, EyeOff, Bot, CheckCircle, RefreshCw, Printer } from 'lucide-react';
 import { AppUpdater } from '../../components/AppUpdater';
@@ -12,11 +12,18 @@ import {
   savePrescriptionPrintSettings,
   type PrescriptionPrintSettings,
 } from '../lib/prescriptionPrintSettings';
-import { deleteAllAppData, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
+import { deleteAllAppData, dryRunAppDataImport, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
 import { DEFAULT_NON_ADMIN_DISCOUNT_PERCENT, REQUESTED_USER_PASSWORD, REQUESTED_USERS } from '../../lib/permissions';
+import { apiRequest, createIdempotencyKey } from '../../lib/hostingerApi';
 
 const ROLES = ['admin','receptionist','doctor','nurse','pharmacist','lab_technician','cashier'];
 type PrintSectionKey = 'name' | 'age' | 'date' | 'clinical' | 'medicines' | 'vitals';
+type MirrorStatus = {
+  pendingCount: number;
+  oldestPendingAt?: string | null;
+  lastSuccessAt?: string | null;
+  lastRun?: { status?: string; started_at?: string; synced_count?: number; retry_count?: number; error_message?: string } | null;
+};
 
 const PRINT_SECTIONS: { key: PrintSectionKey; title: string; hint: string }[] = [
   { key: 'name', title: 'Patient Name', hint: 'Name field on top right' },
@@ -102,6 +109,45 @@ export function Settings() {
   const [userMsg, setUserMsg] = useState('');
   const [creatingRequestedUsers, setCreatingRequestedUsers] = useState(false);
   const [requestedUsersMsg, setRequestedUsersMsg] = useState('');
+  const [repairPurchases, setRepairPurchases] = useState<any[]>([]);
+  const [repairMedicines, setRepairMedicines] = useState<Record<string, any>>({});
+  const [selectedRepairIds, setSelectedRepairIds] = useState<string[]>([]);
+  const [loadingRepairs, setLoadingRepairs] = useState(false);
+  const [applyingRepairs, setApplyingRepairs] = useState(false);
+  const [repairMsg, setRepairMsg] = useState('');
+  const [mirrorStatus, setMirrorStatus] = useState<MirrorStatus | null>(null);
+  const [loadingMirror, setLoadingMirror] = useState(false);
+  const [mirrorMsg, setMirrorMsg] = useState('');
+
+  const loadMirrorStatus = async () => {
+    setLoadingMirror(true);
+    try {
+      setMirrorStatus(await apiRequest<MirrorStatus>('/admin/sync'));
+      setMirrorMsg('');
+    } catch (e: any) {
+      setMirrorMsg('Error: ' + (e.message || 'Could not load mirror status'));
+    } finally {
+      setLoadingMirror(false);
+    }
+  };
+
+  const retryMirror = async () => {
+    setLoadingMirror(true);
+    setMirrorMsg('Re-queuing failed mirror events...');
+    try {
+      const result = await apiRequest<{ queued: number }>('/admin/sync/retry', {
+        method: 'POST',
+        body: JSON.stringify({ requestedAt: nowISO() }),
+        idempotencyKey: createIdempotencyKey('mirror-retry'),
+      });
+      setMirrorMsg(`${result.queued} event(s) queued for the next five-hour mirror run.`);
+      await loadMirrorStatus();
+    } catch (e: any) {
+      setMirrorMsg('Error: ' + (e.message || 'Could not re-queue mirror events'));
+    } finally {
+      setLoadingMirror(false);
+    }
+  };
 
   useEffect(() => {
     getDoc(doc(db, 'settings', 'hospital')).then(snap => {
@@ -116,12 +162,13 @@ export function Settings() {
     });
     setGeminiKeyState(getGeminiKey());
     setPrintSettings(getPrescriptionPrintSettings());
+    void loadMirrorStatus();
   }, []);
 
   const saveHospital = async () => {
     setSavingHospital(true); setHospitalMsg('');
     try {
-      await setDoc(doc(db, 'settings', 'hospital'), hospital);
+      await setDoc(doc(db, 'settings', 'hospital'), hospital, { merge: true });
       setHospitalMsg('✓ Saved successfully');
       setTimeout(() => setHospitalMsg(''), 3000);
     } catch (e: any) { setHospitalMsg('Error: ' + e.message); }
@@ -165,10 +212,15 @@ export function Settings() {
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]; if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = async (ev) => {
       try {
         const data = JSON.parse(ev.target?.result as string);
         if (!data.collections) throw new Error('Invalid backup format');
+        setImportMsg('Validating backup IDs, counts, relationships, and hashes...');
+        const validation = await dryRunAppDataImport(data);
+        if (!validation.valid) throw new Error(validation.errors.join('; ') || 'Backup validation failed');
+        const warningText = validation.warnings.length ? ` ${validation.warnings.length} relationship warning(s) found.` : '';
+        setImportMsg(`Validated ${validation.totalDocuments} records across ${validation.collectionCount} collections.${warningText}`);
         setPendingImport(data); setShowImportConfirm(true);
       } catch (err: any) { setImportMsg('Invalid backup file: ' + err.message); }
     };
@@ -269,6 +321,100 @@ export function Settings() {
     }
   };
 
+  const getPurchaseUnits = (purchase: any) => {
+    const saved = Number(purchase.totalUnitsAdded ?? purchase.unitsAdded);
+    if (Number.isFinite(saved) && saved > 0) return saved;
+    const unitsPerBox = Number(purchase.unitsPerBox) || 1;
+    const boxes = Number(purchase.boxesPurchased ?? purchase.boxes) || 0;
+    const loose = Number(purchase.looseUnitsPurchased ?? purchase.looseUnits) || 0;
+    return (boxes * unitsPerBox) + loose;
+  };
+
+  const loadPurchaseRepairs = async () => {
+    setLoadingRepairs(true);
+    setRepairMsg('');
+    try {
+      const [purchaseSnap, medicineSnap] = await Promise.all([
+        getDocs(collection(db, 'purchases')),
+        getDocs(collection(db, 'medicines')),
+      ]);
+      const medicineMap = Object.fromEntries(medicineSnap.docs.map(item => [item.id, { id: item.id, ...item.data() }]));
+      const unverified = purchaseSnap.docs
+        .map(item => ({ id: item.id, ...item.data() } as any))
+        .filter(item => !item.stockAppliedAt && !item.stockRepairAppliedAt)
+        .sort((a, b) => new Date(b.date || b.createdAt || 0).getTime() - new Date(a.date || a.createdAt || 0).getTime());
+      setRepairMedicines(medicineMap);
+      setRepairPurchases(unverified);
+      setSelectedRepairIds([]);
+      setRepairMsg(unverified.length ? `${unverified.length} unverified legacy purchase(s) found.` : 'No unverified legacy purchases found.');
+    } catch (e: any) {
+      setRepairMsg('Error: ' + (e.message || 'Could not load purchase records'));
+    } finally {
+      setLoadingRepairs(false);
+    }
+  };
+
+  const getRepairDisabledReason = (purchase: any) => {
+    if (!purchase.medicineId) return 'Missing medicine ID';
+    if (!repairMedicines[purchase.medicineId]) return 'Medicine was deleted or is unavailable';
+    if (!Number.isFinite(getPurchaseUnits(purchase)) || getPurchaseUnits(purchase) <= 0) return 'Invalid purchase quantity';
+    if (purchase.stockAppliedAt || purchase.stockRepairAppliedAt) return 'Stock application is already recorded';
+    return '';
+  };
+
+  const applyPurchaseRepairs = async () => {
+    if (!selectedRepairIds.length) return;
+    const confirmed = window.confirm(
+      `Add stock for ${selectedRepairIds.length} selected purchase(s)? Only continue for purchases you know did not previously affect stock.`
+    );
+    if (!confirmed) return;
+
+    setApplyingRepairs(true);
+    setRepairMsg('Applying selected repairs...');
+    let applied = 0;
+    const failures: string[] = [];
+    for (const purchaseId of selectedRepairIds) {
+      try {
+        await runTransaction(db, async tx => {
+          const purchaseRef = doc(db, 'purchases', purchaseId);
+          const purchaseSnap = await tx.get(purchaseRef);
+          if (!purchaseSnap.exists()) throw new Error('Purchase record no longer exists');
+          const purchase = purchaseSnap.data();
+          if (purchase.stockAppliedAt || purchase.stockRepairAppliedAt) throw new Error('Stock was already applied or repaired');
+          if (!purchase.medicineId) throw new Error('Medicine ID is missing');
+          const units = getPurchaseUnits(purchase);
+          if (!Number.isFinite(units) || units <= 0) throw new Error('Purchase quantity is invalid');
+
+          const medicineRef = doc(db, 'medicines', purchase.medicineId);
+          const medicineSnap = await tx.get(medicineRef);
+          if (!medicineSnap.exists()) throw new Error('Medicine no longer exists');
+          const stockBefore = Number(medicineSnap.data().stock || 0);
+          const stockAfter = stockBefore + units;
+          const repairedAt = nowISO();
+          const repairedBy = auth.currentUser?.uid || 'admin';
+
+          tx.update(medicineRef, { stock: stockAfter, updatedAt: repairedAt });
+          tx.update(purchaseRef, {
+            stockBefore,
+            stockAfter,
+            stockRepairBefore: stockBefore,
+            stockRepairAfter: stockAfter,
+            stockRepairAppliedAt: repairedAt,
+            repairedBy,
+          });
+        });
+        applied += 1;
+      } catch (e: any) {
+        failures.push(`${purchaseId.slice(0, 8)}: ${e.message || 'failed'}`);
+      }
+    }
+    setApplyingRepairs(false);
+    await loadPurchaseRepairs();
+    setRepairMsg(failures.length
+      ? `Applied ${applied} repair(s). Failed: ${failures.join('; ')}`
+      : `Applied ${applied} stock repair(s) successfully.`);
+  };
+
   return (
     <div className="space-y-6 max-w-3xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
@@ -308,6 +454,47 @@ export function Settings() {
           <h2 className="font-semibold text-gray-900">Change Password</h2>
         </div>
         <ChangePasswordForm />
+      </div>
+
+      {/* Firestore Disaster-Recovery Mirror */}
+      <div className="bg-white rounded-xl border border-cyan-200 shadow-sm p-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <RefreshCw className={`w-5 h-5 text-cyan-700 ${loadingMirror ? 'animate-spin' : ''}`} />
+              <h2 className="font-semibold text-gray-900">Firestore Recovery Mirror</h2>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">MySQL is the live database. Committed changes are copied to Firestore by the five-hour cron worker.</p>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={loadMirrorStatus} disabled={loadingMirror}
+              className="px-3 py-2 border border-cyan-200 text-cyan-800 rounded-lg text-sm font-medium hover:bg-cyan-50 disabled:opacity-50">
+              Refresh
+            </button>
+            <button onClick={retryMirror} disabled={loadingMirror}
+              className="px-3 py-2 bg-cyan-700 text-white rounded-lg text-sm font-medium hover:bg-cyan-800 disabled:opacity-50">
+              Retry Failed
+            </button>
+          </div>
+        </div>
+        {mirrorStatus && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+            <div className="border border-gray-200 rounded-lg p-3">
+              <p className="text-xs text-gray-500">Waiting to mirror</p>
+              <p className="text-xl font-semibold text-gray-900 mt-1">{mirrorStatus.pendingCount || 0}</p>
+            </div>
+            <div className="border border-gray-200 rounded-lg p-3">
+              <p className="text-xs text-gray-500">Last successful event</p>
+              <p className="text-sm font-semibold text-gray-900 mt-1">{mirrorStatus.lastSuccessAt ? new Date(mirrorStatus.lastSuccessAt).toLocaleString() : 'Not run yet'}</p>
+            </div>
+            <div className="border border-gray-200 rounded-lg p-3">
+              <p className="text-xs text-gray-500">Last worker run</p>
+              <p className="text-sm font-semibold text-gray-900 mt-1 capitalize">{mirrorStatus.lastRun?.status || 'Not run yet'}</p>
+              {mirrorStatus.lastRun && <p className="text-xs text-gray-500 mt-1">{mirrorStatus.lastRun.synced_count || 0} synced, {mirrorStatus.lastRun.retry_count || 0} queued</p>}
+            </div>
+          </div>
+        )}
+        {mirrorMsg && <p className={`text-xs font-medium mt-3 ${mirrorMsg.startsWith('Error') ? 'text-red-600' : 'text-cyan-800'}`}>{mirrorMsg}</p>}
       </div>
 
       {/* User Management */}
@@ -362,6 +549,70 @@ export function Settings() {
           </button>
         </div>
         {permissionSettingsMsg && <p className={`text-sm mt-3 font-medium ${permissionSettingsMsg.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>{permissionSettingsMsg}</p>}
+      </div>
+
+      {/* Purchase Stock Repair */}
+      <div className="bg-white rounded-xl border border-amber-200 shadow-sm p-6">
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-amber-600" />
+              <h2 className="font-semibold text-gray-900">Purchase Stock Repair</h2>
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Review older purchases that do not have a stock-application marker.</p>
+          </div>
+          <button
+            onClick={loadPurchaseRepairs}
+            disabled={loadingRepairs || applyingRepairs}
+            className="flex items-center justify-center gap-2 px-4 py-2 border border-amber-300 text-amber-800 rounded-lg text-sm font-medium hover:bg-amber-50 disabled:opacity-60"
+          >
+            <RefreshCw className={`w-4 h-4 ${loadingRepairs ? 'animate-spin' : ''}`} /> {loadingRepairs ? 'Loading...' : 'Review Purchases'}
+          </button>
+        </div>
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          An unverified record is not proof that stock was missed. Select only purchases you know did not increase stock. Each repair is transactional and can be applied only once.
+        </div>
+        {repairPurchases.length > 0 && (
+          <div className="mt-4 max-h-80 overflow-auto border border-gray-200 rounded-lg divide-y divide-gray-100">
+            {repairPurchases.map(purchase => {
+              const medicine = repairMedicines[purchase.medicineId];
+              const disabledReason = getRepairDisabledReason(purchase);
+              const checked = selectedRepairIds.includes(purchase.id);
+              return (
+                <label key={purchase.id} className={`flex items-start gap-3 p-3 ${disabledReason ? 'bg-gray-50 text-gray-400' : 'hover:bg-gray-50 cursor-pointer'}`}>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={Boolean(disabledReason) || applyingRepairs}
+                    onChange={e => setSelectedRepairIds(ids => e.target.checked ? [...ids, purchase.id] : ids.filter(id => id !== purchase.id))}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <span className="text-sm font-semibold text-gray-800">{purchase.medicineName || medicine?.name || 'Unknown medicine'}</span>
+                      <span className="text-xs text-gray-500">{getPurchaseUnits(purchase)} unit(s)</span>
+                      <span className="text-xs text-gray-400">{purchase.date || purchase.createdAt || 'Date unavailable'}</span>
+                    </div>
+                    <p className="text-xs mt-1 text-gray-500">Current stock: {medicine ? Number(medicine.stock || 0) : 'Unavailable'}{purchase.supplierName ? ` | Supplier: ${purchase.supplierName}` : ''}</p>
+                    {disabledReason && <p className="text-xs mt-1 font-medium text-red-500">Cannot repair: {disabledReason}</p>}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        )}
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mt-4">
+          {repairPurchases.length > 0 && (
+            <button
+              onClick={applyPurchaseRepairs}
+              disabled={!selectedRepairIds.length || applyingRepairs}
+              className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50"
+            >
+              {applyingRepairs ? 'Applying...' : `Apply ${selectedRepairIds.length} Selected Repair(s)`}
+            </button>
+          )}
+          {repairMsg && <p className={`text-xs font-medium ${repairMsg.startsWith('Error') || repairMsg.includes('Failed:') ? 'text-red-600' : 'text-gray-600'}`}>{repairMsg}</p>}
+        </div>
       </div>
 
       {/* Backup & Restore */}
@@ -514,7 +765,7 @@ export function Settings() {
           <AlertTriangle className="w-5 h-5 text-red-500" />
           <h2 className="font-semibold text-red-600">Danger Zone</h2>
         </div>
-        <p className="text-sm text-gray-500 mb-4">Permanently delete every Firestore record used by HMS and Pharmacy. This cannot be undone.</p>
+        <p className="text-sm text-gray-500 mb-4">Permanently delete every MySQL record used by HMS and Pharmacy. Mirrored deletes will also be queued for Firestore. This cannot be undone.</p>
         <p className="text-xs text-gray-400 mb-4">{GLOBAL_DATA_COLLECTIONS.length} collections included. Firebase Authentication accounts are not deleted by the app.</p>
         <button onClick={() => setShowClearConfirm(true)} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm font-medium hover:bg-red-700">
           <Trash2 className="w-4 h-4" /> Clear All Data

@@ -1,14 +1,25 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, db, logout } from './firebase';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, logout } from './firebase';
 import { HMSApp } from './hms/HMSApp';
 import { GlobalAppNotifications } from './components/GlobalAppNotifications';
 import { AppDialogProvider } from './components/AppDialog';
+import { DataConnectionBanner } from './components/DataConnectionBanner';
+import { ApiConnectionSetup } from './components/ApiConnectionSetup';
 import { canAccessApp, type UserProfile } from './lib/permissions';
+import { HostingerApiError, loadCurrentProfile, needsRuntimeApiConfiguration } from './lib/hostingerApi';
+import { hostingerDocumentStore } from './lib/hostingerDocumentStore';
 
-const FIRST_ADMIN_EMAIL = 'admin@gmh-suite.internal';
+const PROFILE_CACHE_KEY = 'gmh-suite-current-profile';
+
+function readCachedProfile() {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILE_CACHE_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
 
 export default function App() {
   const [user, setUser] = useState<any>(undefined);
@@ -19,46 +30,34 @@ export default function App() {
   const [sessionAuthed, setSessionAuthed] = useState(false);
 
   useEffect(() => {
+    if (needsRuntimeApiConfiguration()) {
+      setUser(null);
+      return;
+    }
     const unsub = onAuthStateChanged(auth, async (u) => {
-      setAuthError('');
+      hostingerDocumentStore.setUserScope(u?.uid || '');
       if (u) {
+        setAuthError('');
         setUserEmail(u.email || '');
         try {
-          const snap = await getDoc(doc(db, 'users', u.uid));
-          if (!snap.exists()) {
-            if ((u.email || '').toLowerCase() === FIRST_ADMIN_EMAIL) {
-              const adminProfile: UserProfile = {
-                uid: u.uid,
-                name: 'Administrator',
-                username: 'admin',
-                email: FIRST_ADMIN_EMAIL,
-                role: 'admin',
-                app: 'all',
-                appAccess: ['hms', 'pos'],
-                permissions: {},
-              };
-              await setDoc(doc(db, 'users', u.uid), {
-                ...adminProfile,
-                createdAt: new Date().toISOString(),
-              });
-              setUserRole('admin');
-              setUserProfile(adminProfile);
-            } else {
-              setAuthError('Your account has not been configured yet. Please contact your administrator.');
-              await logout();
-              setUserRole(null);
-              setUserProfile(null);
-              setUserEmail('');
-            }
+          const response = await loadCurrentProfile<UserProfile>();
+          const profile = { uid: u.uid, ...response.profile } as UserProfile;
+          localStorage.setItem(PROFILE_CACHE_KEY, JSON.stringify({ uid: u.uid, profile }));
+          setUserRole(profile.role || 'cashier');
+          setUserProfile(profile);
+          setSessionAuthed(true);
+        } catch (error) {
+          const cached = readCachedProfile();
+          if (error instanceof HostingerApiError && error.code === 'unavailable' && cached?.uid === u.uid && cached.profile) {
+            setUserRole(cached.profile.role || 'cashier');
+            setUserProfile(cached.profile);
+            setSessionAuthed(true);
+            setAuthError('The data service is offline. You can review cached records, but changes are disabled.');
           } else {
-            const profile = { uid: u.uid, ...snap.data() } as UserProfile;
-            setUserRole(profile.role || 'cashier');
-            setUserProfile(profile);
+            setAuthError(error instanceof Error ? error.message : 'Failed to load your account from the Hostinger data service.');
+            await logout();
+            setUserProfile(null);
           }
-        } catch {
-          setAuthError('Failed to load your account. Make sure the first admin user is configured in Firestore.');
-          await logout();
-          setUserProfile(null);
         }
       } else {
         setUserRole(null);
@@ -84,10 +83,15 @@ export default function App() {
 
   const withShell = (node: ReactNode) => (
     <AppDialogProvider>
+      <DataConnectionBanner />
       <GlobalAppNotifications />
       {node}
     </AppDialogProvider>
   );
+
+  if (needsRuntimeApiConfiguration()) {
+    return withShell(<ApiConnectionSetup />);
+  }
 
   if (user === undefined) {
     return withShell(

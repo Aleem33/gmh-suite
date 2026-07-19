@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, doc, updateDoc, increment } from 'firebase/firestore';
+import { addDoc, collection, onSnapshot, query, where } from '../../lib/firestoreCompat';
 import { printOrShare } from '../lib/nativeUtils';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
-import { Search, RotateCcw, X, CheckCircle, AlertTriangle, Printer } from 'lucide-react';
+import { Search, RotateCcw, X, CheckCircle, AlertTriangle, Printer, Send } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, type UserProfile } from '../../lib/permissions';
+import { processPurchaseReturn } from '../lib/returnProcessing';
 
 // ── Print via hidden iframe ───────────────────────────────────────────────────
 function printSlip(slipHtml: string) {
@@ -54,9 +56,10 @@ function buildPurchaseReturnSlip(data: any, upb: number) {
 
 interface PurchaseReturnsProps {
   readOnly?: boolean;
+  userProfile?: UserProfile | null;
 }
 
-export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
+export function PurchaseReturns({ readOnly = false, userProfile }: PurchaseReturnsProps) {
   const [purchases, setPurchases] = useState<any[]>([]);
   const [medicines, setMedicines] = useState<Record<string, number>>({});  // medicineId → current stock
   const [returns, setReturns] = useState<any[]>([]);
@@ -67,6 +70,9 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
   const [returnReason, setReturnReason] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [approvalRequests, setApprovalRequests] = useState<any[]>([]);
+  const canRequestApproval = userProfile?.username === 'haseeb' || hasPermission(userProfile, 'pos.purchaseReturns.request');
+  const canStartReturn = !readOnly || canRequestApproval;
 
   useEffect(() => {
     const unsubMedicines = onSnapshot(collection(db, 'medicines'), (snap) => {
@@ -87,8 +93,18 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
       setReturns(list);
     }, (e) => handleFirestoreError(e, OperationType.GET, 'purchaseReturns'));
 
-    return () => { unsubMedicines(); unsubPurchases(); unsubReturns(); };
-  }, []);
+    let unsubApprovals = () => {};
+    const uid = auth.currentUser?.uid;
+    if (canRequestApproval && uid) {
+      unsubApprovals = onSnapshot(
+        query(collection(db, 'approvalRequests'), where('requestedBy', '==', uid)),
+        snap => setApprovalRequests(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+        e => handleFirestoreError(e, OperationType.GET, 'approvalRequests'),
+      );
+    }
+
+    return () => { unsubMedicines(); unsubPurchases(); unsubReturns(); unsubApprovals(); };
+  }, [canRequestApproval]);
 
   const filteredPurchases = purchases.filter(p =>
     p.medicineName?.toLowerCase().includes(search.toLowerCase()) ||
@@ -102,8 +118,17 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
       .reduce((sum, r) => sum + (r.totalUnitsReturned || 0), 0);
   };
 
+  const getPurchasedUnits = (purchase: any) => {
+    const savedUnits = Number(purchase.totalUnitsAdded ?? purchase.unitsAdded);
+    if (Number.isFinite(savedUnits) && savedUnits > 0) return savedUnits;
+    const purchaseUnitsPerBox = Number(purchase.unitsPerBox) || 1;
+    const purchaseBoxes = Number(purchase.boxesPurchased ?? purchase.boxes) || 0;
+    const purchaseLoose = Number(purchase.looseUnitsPurchased ?? purchase.looseUnits) || 0;
+    return (purchaseBoxes * purchaseUnitsPerBox) + purchaseLoose;
+  };
+
   const openReturn = (purchase: any) => {
-    if (readOnly) return;
+    if (!canStartReturn) return;
     setSelectedPurchase(purchase);
     setReturnBoxes('');
     setReturnLoose('0');
@@ -116,10 +141,12 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
   const boxes = parseInt(returnBoxes || '0');
   const loose = parseInt(returnLoose || '0');
   const totalUnitsToReturn = boxes * unitsPerBox + loose;
-  const alreadyReturned = selectedPurchase ? getAlreadyReturnedUnits(selectedPurchase.id) : 0;
+  const alreadyReturned = selectedPurchase
+    ? Math.max(getAlreadyReturnedUnits(selectedPurchase.id), Number(selectedPurchase.returnedUnits || 0))
+    : 0;
   const currentStock = selectedPurchase ? (medicines[selectedPurchase.medicineId] ?? 0) : 0;
   const maxReturnable = selectedPurchase
-    ? Math.min(selectedPurchase.totalUnitsAdded - alreadyReturned, currentStock)
+    ? Math.min(getPurchasedUnits(selectedPurchase) - alreadyReturned, currentStock)
     : 0;
   const isValid = totalUnitsToReturn > 0 && totalUnitsToReturn <= maxReturnable;
   const refundAmount = (boxes * unitsPerBox + loose) * costPricePerUnit;
@@ -134,34 +161,41 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
   };
 
   const handleSubmit = async () => {
-    if (readOnly) return;
     if (!isValid || !selectedPurchase || submitting) return;
     setSubmitting(true);
     try {
-      const returnDoc = {
+      if (readOnly && canRequestApproval) {
+        await addDoc(collection(db, 'approvalRequests'), {
+          type: 'purchaseReturn',
+          status: 'pending',
+          title: `Purchase return: ${selectedPurchase.medicineName}`,
+          originalPurchaseId: selectedPurchase.id,
+          medicineId: selectedPurchase.medicineId,
+          medicineName: selectedPurchase.medicineName,
+          supplierId: selectedPurchase.supplierId || null,
+          supplierName: selectedPurchase.supplierName || 'N/A',
+          boxesReturned: boxes,
+          looseUnitsReturned: loose,
+          totalUnitsReturned: totalUnitsToReturn,
+          unitsPerBox,
+          estimatedRefundAmount: refundAmount,
+          reason: returnReason,
+          requestedBy: auth.currentUser?.uid || 'unknown',
+          requestedByName: userProfile?.name || userProfile?.username || 'Haseeb',
+          createdAt: new Date().toISOString(),
+        });
+        setSelectedPurchase(null);
+        setSuccessMsg(`Purchase return sent for admin approval - ${totalUnitsToReturn} units requested`);
+        setTimeout(() => setSuccessMsg(''), 5000);
+        return;
+      }
+      const dataWithId = await processPurchaseReturn({
         originalPurchaseId: selectedPurchase.id,
-        medicineId: selectedPurchase.medicineId,
-        medicineName: selectedPurchase.medicineName,
-        supplierId: selectedPurchase.supplierId || null,
-        supplierName: selectedPurchase.supplierName || 'N/A',
         boxesReturned: boxes,
         looseUnitsReturned: loose,
         totalUnitsReturned: totalUnitsToReturn,
-        costPrice: selectedPurchase.costPrice || 0,
-        costPricePerUnit,
-        refundAmount,
         reason: returnReason,
-        date: new Date().toISOString(),
-        processedBy: auth.currentUser?.uid,
-        unitsPerBox,
-      };
-
-      const docRef = await addDoc(collection(db, 'purchaseReturns'), returnDoc);
-      await updateDoc(doc(db, 'medicines', selectedPurchase.medicineId), {
-        stock: increment(-totalUnitsToReturn),
       });
-
-      const dataWithId = { ...returnDoc, id: docRef.id };
       setSelectedPurchase(null);
       setSuccessMsg(`Return to supplier processed — ${totalUnitsToReturn} units deducted`);
       setTimeout(() => setSuccessMsg(''), 5000);
@@ -204,6 +238,7 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
             {filteredPurchases.map(p => {
               const alreadyRet = getAlreadyReturnedUnits(p.id);
               const remaining = p.totalUnitsAdded - alreadyRet;
+              const pendingRequest = approvalRequests.find(r => r.type === 'purchaseReturn' && r.status === 'pending' && r.originalPurchaseId === p.id);
               return (
                 <div key={p.id} className="p-4 hover:bg-gray-50 flex justify-between items-center gap-3">
                   <div className="min-w-0">
@@ -217,10 +252,15 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
                         {formatUnits(alreadyRet, p.unitsPerBox || 1)} already returned
                       </span>
                     )}
+                    {pendingRequest && (
+                      <span className="inline-block mt-1 ml-1 text-[10px] bg-yellow-100 text-yellow-700 font-semibold px-1.5 py-0.5 rounded">
+                        Approval pending
+                      </span>
+                    )}
                   </div>
-                  {!readOnly && <button
+                  {canStartReturn && <button
                     onClick={() => openReturn(p)}
-                    disabled={remaining <= 0}
+                    disabled={remaining <= 0 || !!pendingRequest}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-orange-50 text-orange-700 rounded-lg text-xs font-semibold hover:bg-orange-100 border border-orange-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Return
@@ -275,7 +315,7 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
       </div>
 
       {/* Process Return Modal */}
-      {!readOnly && selectedPurchase && (
+      {canStartReturn && selectedPurchase && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-md my-8">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center">
@@ -289,6 +329,11 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
             </div>
 
             <div className="p-6 space-y-4">
+              {readOnly && canRequestApproval && (
+                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3 text-sm text-yellow-800">
+                  This sends an approval request. Stock changes only after an admin approves it.
+                </div>
+              )}
               <div className="bg-gray-50 rounded-lg p-3 text-sm space-y-1">
                 <div className="flex justify-between text-gray-600">
                   <span>Originally purchased:</span>
@@ -383,8 +428,8 @@ export function PurchaseReturns({ readOnly = false }: PurchaseReturnsProps) {
                   disabled={!isValid || submitting}
                   className="px-4 py-2 bg-orange-600 text-white rounded-md font-medium text-sm hover:bg-orange-700 disabled:opacity-50 flex items-center gap-2"
                 >
-                  <Printer className="w-4 h-4" />
-                  {submitting ? 'Processing...' : 'Confirm Return & Print Slip'}
+                  {readOnly && canRequestApproval ? <Send className="w-4 h-4" /> : <Printer className="w-4 h-4" />}
+                  {submitting ? 'Processing...' : readOnly && canRequestApproval ? 'Send for Approval' : 'Confirm Return & Print Slip'}
                 </button>
               </div>
             </div>

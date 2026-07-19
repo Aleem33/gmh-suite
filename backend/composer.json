@@ -1,0 +1,32 @@
+{
+  "name": "gmh/suite-backend",
+  "description": "Hostinger PHP/MySQL API and Firestore disaster-recovery mirror for GMH Suite",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.3",
+    "ext-json": "*",
+    "ext-pdo": "*",
+    "guzzlehttp/guzzle": "^7.9",
+    "google/auth": "^1.45",
+    "kreait/firebase-php": "^7.16",
+    "vlucas/phpdotenv": "^5.6"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.5"
+  },
+  "autoload": {
+    "psr-4": {
+      "GMH\\Backend\\": "src/"
+    }
+  },
+  "scripts": {
+    "test": "phpunit",
+    "lint": "@php scripts/lint.php"
+  },
+  "config": {
+    "optimize-autoloader": true,
+    "sort-packages": true,
+    "allow-plugins": {}
+  }
+}

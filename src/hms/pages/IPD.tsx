@@ -1,14 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, doc, runTransaction } from '../../lib/firestoreCompat';
 import { db, auth, getNextBillNo } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
-import { Plus, Search, X, BedDouble, LogOut, Eye, Pill, FileText, Activity, ChevronDown, ChevronUp } from 'lucide-react';
+import { Plus, Search, X, BedDouble, LogOut, Eye, Pill, FileText, Activity, ChevronDown, ChevronUp, ShoppingCart, Trash2, CheckCircle, AlertTriangle } from 'lucide-react';
 import { differenceInDays } from 'date-fns';
 import { cn } from '../lib/utils';
 import { useAppDialog } from '../../components/AppDialog';
 
-const TREATMENT_TYPES = ['Medication', 'Procedure', 'Lab Test', 'Vitals', 'Nursing Note', 'Doctor Note'];
+const TREATMENT_TYPES = ['Medication', 'Surgery / Operation', 'Procedure', 'Lab Test', 'Vitals', 'Nursing Note', 'Doctor Note'];
+
+interface PharmacyTreatmentItem {
+  medicineId: string;
+  name: string;
+  category: string;
+  stock: number;
+  unitsPerBox: number;
+  sellType: 'unit' | 'box';
+  quantity: number;
+}
 
 export function IPD() {
   const { alert } = useAppDialog();
@@ -18,6 +28,8 @@ export function IPD() {
   const [wards, setWards] = useState<any[]>([]);
   const [beds, setBeds] = useState<any[]>([]);
   const [treatments, setTreatments] = useState<any[]>([]);
+  const [medicines, setMedicines] = useState<any[]>([]);
+  const [pharmacyOrders, setPharmacyOrders] = useState<any[]>([]);
 
   const [tab, setTab] = useState<'current' | 'discharged'>('current');
   const [search, setSearch] = useState('');
@@ -36,6 +48,8 @@ export function IPD() {
 
   // Treatment form
   const [treatForm, setTreatForm] = useState({ type: 'Medication', description: '', date: today(), time: '08:00' });
+  const [pharmacyItems, setPharmacyItems] = useState<PharmacyTreatmentItem[]>([]);
+  const [medicineSearch, setMedicineSearch] = useState('');
 
   useEffect(() => {
     const u1 = onSnapshot(collection(db, 'admissions'), snap => setAdmissions(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => b.admissionDate > a.admissionDate ? 1 : -1)));
@@ -44,7 +58,9 @@ export function IPD() {
     const u4 = onSnapshot(collection(db, 'wards'), snap => setWards(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const u5 = onSnapshot(collection(db, 'beds'), snap => setBeds(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
     const u6 = onSnapshot(collection(db, 'bedTreatments'), snap => setTreatments(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
-    return () => { u1(); u2(); u3(); u4(); u5(); u6(); };
+    const u7 = onSnapshot(collection(db, 'medicines'), snap => setMedicines(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))));
+    const u8 = onSnapshot(collection(db, 'pharmacyOrders'), snap => setPharmacyOrders(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => { u1(); u2(); u3(); u4(); u5(); u6(); u7(); u8(); };
   }, []);
 
   const filtered = admissions.filter(a => {
@@ -68,9 +84,18 @@ export function IPD() {
     }
     setSaving(true); setError('');
     try {
-      const ref = await addDoc(collection(db, 'admissions'), { ...form, dailyRate: Number(form.dailyRate), status: 'admitted', createdAt: nowISO() });
-      // Mark bed as occupied
-      if (form.bedId) await updateDoc(doc(db, 'beds', form.bedId), { status: 'occupied' });
+      const ref = doc(collection(db, 'admissions'));
+      await runTransaction(db, async tx => {
+        if (form.bedId) {
+          const bedRef = doc(db, 'beds', form.bedId);
+          const bedSnapshot = await tx.get(bedRef);
+          if (!bedSnapshot.exists() || bedSnapshot.data().status === 'occupied') {
+            throw new Error('This bed is no longer available. Select another bed.');
+          }
+          tx.update(bedRef, { status: 'occupied', updatedAt: nowISO() });
+        }
+        tx.set(ref, { ...form, dailyRate: Number(form.dailyRate), status: 'admitted', createdAt: nowISO() });
+      });
       await logAudit('create', 'admission', ref.id, `${form.patientName} → ${form.wardName} Bed ${form.bedNo}`);
       setShowModal(false);
       setForm({ patientId: '', patientName: '', patientMRN: '', patientAge: '', patientGender: '', doctorId: '', doctorName: '', wardId: '', wardName: '', bedId: '', bedNo: '', dailyRate: '2000', admissionDate: today(), diagnosis: '', notes: '', referredBy: '' });
@@ -80,6 +105,18 @@ export function IPD() {
 
   const handleDischarge = async () => {
     if (!showDischarge) return;
+    const pendingPharmacyOrders = pharmacyOrders.filter(order =>
+      order.admissionId === showDischarge.id &&
+      order.fulfillmentMode === 'billing' &&
+      order.status === 'pending'
+    );
+    if (pendingPharmacyOrders.length > 0) {
+      await alert(
+        `${pendingPharmacyOrders.length} IPD pharmacy order(s) are still pending. Complete them in Pharmacy Billing or cancel them from the care log before discharge.`,
+        'Pending Pharmacy Orders'
+      );
+      return;
+    }
     setSaving(true);
     try {
       const days = differenceInDays(new Date(dischargeDate), new Date(showDischarge.admissionDate)) || 1;
@@ -93,7 +130,19 @@ export function IPD() {
         category: 'Medicine', quantity: 1, rate: 0, amount: 0,
       }] : [];
 
-      await addDoc(collection(db, 'bills'), {
+      const billRef = doc(collection(db, 'bills'));
+      await runTransaction(db, async tx => {
+        const admissionRef = doc(db, 'admissions', showDischarge.id);
+        const admissionSnapshot = await tx.get(admissionRef);
+        if (!admissionSnapshot.exists() || admissionSnapshot.data().status !== 'admitted') {
+          throw new Error('This admission is no longer active.');
+        }
+        let bedRef: ReturnType<typeof doc> | null = null;
+        if (showDischarge.bedId) {
+          bedRef = doc(db, 'beds', showDischarge.bedId);
+          await tx.get(bedRef);
+        }
+        tx.set(billRef, {
         billNo, patientId: showDischarge.patientId, patientName: showDischarge.patientName, patientMRN: showDischarge.patientMRN,
         date: dischargeDate,
         items: [
@@ -103,12 +152,10 @@ export function IPD() {
         subtotal: totalCharges, discount: 0, total: totalCharges, paid: 0, balance: totalCharges,
         paymentStatus: 'pending', paymentMethod: 'Cash', cashierId: auth.currentUser?.uid || '',
         notes: `Auto-generated on discharge. ${showDischarge.admissionDate} → ${dischargeDate}`, createdAt: nowISO(),
+        });
+        tx.update(admissionRef, { status: 'discharged', dischargeDate, dischargeSummary, totalCharges, updatedAt: nowISO() });
+        if (bedRef) tx.update(bedRef, { status: 'available', updatedAt: nowISO() });
       });
-
-      await updateDoc(doc(db, 'admissions', showDischarge.id), { status: 'discharged', dischargeDate, dischargeSummary, totalCharges, updatedAt: nowISO() });
-
-      // Free up the bed
-      if (showDischarge.bedId) await updateDoc(doc(db, 'beds', showDischarge.bedId), { status: 'available' });
       await logAudit('update', 'admission', showDischarge.id, `${showDischarge.patientName} discharged`);
 
       setShowDischarge(null); setDischargeSummary(''); setDischargeDate(today());
@@ -116,19 +163,150 @@ export function IPD() {
     finally { setSaving(false); }
   };
 
+  const isPharmacyTreatment = treatForm.type === 'Medication' || treatForm.type === 'Surgery / Operation';
+  const requestedUnits = (item: PharmacyTreatmentItem) => item.quantity * (item.sellType === 'box' ? item.unitsPerBox : 1);
+  const filteredMedicines = medicines.filter(medicine => {
+    if (Number(medicine.stock || 0) <= 0) return false;
+    const term = medicineSearch.trim().toLowerCase();
+    return !term ||
+      medicine.name?.toLowerCase().includes(term) ||
+      medicine.category?.toLowerCase().includes(term) ||
+      medicine.batchNo?.toLowerCase().includes(term);
+  });
+
+  const addPharmacyItem = (medicine: any) => {
+    if (pharmacyItems.some(item => item.medicineId === medicine.id)) return;
+    setPharmacyItems(items => [...items, {
+      medicineId: medicine.id,
+      name: medicine.name,
+      category: medicine.category || 'Other',
+      stock: Number(medicine.stock || 0),
+      unitsPerBox: Math.max(1, Number(medicine.unitsPerBox) || 1),
+      sellType: 'unit',
+      quantity: 1,
+    }]);
+  };
+
+  const updatePharmacyItem = (medicineId: string, changes: Partial<PharmacyTreatmentItem>) => {
+    setPharmacyItems(items => items.map(item => item.medicineId === medicineId ? { ...item, ...changes } : item));
+  };
+
+  const closeTreatmentModal = () => {
+    setShowTreatmentModal(null);
+    setPharmacyItems([]);
+    setMedicineSearch('');
+    setTreatForm({ type: 'Medication', description: '', date: today(), time: '08:00' });
+  };
+
   const handleAddTreatment = async () => {
-    if (!treatForm.description.trim() || !showTreatmentModal) return;
+    if (!showTreatmentModal) return;
+    if (!isPharmacyTreatment && !treatForm.description.trim()) return;
+    if (isPharmacyTreatment && !pharmacyItems.length) {
+      await alert('Select at least one in-stock pharmacy item.', 'No Items Selected');
+      return;
+    }
+    const invalidItem = pharmacyItems.find(item => !Number.isInteger(item.quantity) || item.quantity <= 0 || requestedUnits(item) > item.stock);
+    if (isPharmacyTreatment && invalidItem) {
+      await alert(
+        `${invalidItem.name} needs a valid quantity within available stock (${invalidItem.stock} unit(s)).`,
+        'Invalid Quantity'
+      );
+      return;
+    }
     setSaving(true);
     try {
-      await addDoc(collection(db, 'bedTreatments'), {
-        ...treatForm, admissionId: showTreatmentModal.id,
-        patientId: showTreatmentModal.patientId, patientName: showTreatmentModal.patientName,
-        wardName: showTreatmentModal.wardName, bedNo: showTreatmentModal.bedNo,
-        addedBy: auth.currentUser?.email || 'staff', createdAt: nowISO(),
-      });
-      setTreatForm({ type: 'Medication', description: '', date: today(), time: '08:00' });
+      const createdAt = nowISO();
+      if (isPharmacyTreatment) {
+        const treatmentRef = doc(collection(db, 'bedTreatments'));
+        const pharmacyOrderRef = doc(collection(db, 'pharmacyOrders'));
+        const source = treatForm.type === 'Medication' ? 'ipd_medication' : 'ipd_surgery';
+        const orderItems = pharmacyItems.map(item => ({
+          medicineId: item.medicineId,
+          name: item.name,
+          category: item.category,
+          sellType: item.sellType,
+          quantity: item.quantity,
+          requestedUnits: requestedUnits(item),
+          unitsPerBox: item.unitsPerBox,
+          stockAtRequest: item.stock,
+        }));
+        const itemSummary = orderItems.map(item => `${item.name} x ${item.quantity} ${item.sellType}`).join(', ');
+
+        await runTransaction(db, async tx => {
+          tx.set(treatmentRef, {
+            ...treatForm,
+            description: treatForm.description.trim() || itemSummary,
+            admissionId: showTreatmentModal.id,
+            patientId: showTreatmentModal.patientId,
+            patientName: showTreatmentModal.patientName,
+            patientMRN: showTreatmentModal.patientMRN || '',
+            wardId: showTreatmentModal.wardId || '',
+            wardName: showTreatmentModal.wardName || '',
+            bedId: showTreatmentModal.bedId || '',
+            bedNo: showTreatmentModal.bedNo || '',
+            pharmacyOrderId: pharmacyOrderRef.id,
+            pharmacyItems: orderItems,
+            source,
+            fulfillmentStatus: 'pending',
+            addedBy: auth.currentUser?.email || 'staff',
+            addedByUid: auth.currentUser?.uid || '',
+            createdAt,
+          });
+          tx.set(pharmacyOrderRef, {
+            source,
+            fulfillmentMode: 'billing',
+            status: 'pending',
+            admissionId: showTreatmentModal.id,
+            patientId: showTreatmentModal.patientId,
+            patientName: showTreatmentModal.patientName,
+            patientMRN: showTreatmentModal.patientMRN || '',
+            wardId: showTreatmentModal.wardId || '',
+            wardName: showTreatmentModal.wardName || '',
+            bedId: showTreatmentModal.bedId || '',
+            bedNo: showTreatmentModal.bedNo || '',
+            bedTreatmentId: treatmentRef.id,
+            items: orderItems,
+            prescriptions: orderItems,
+            notes: treatForm.description.trim(),
+            requestedBy: auth.currentUser?.uid || '',
+            requestedByName: auth.currentUser?.email || 'IPD staff',
+            requestedAt: createdAt,
+            createdAt,
+          });
+        });
+        closeTreatmentModal();
+      } else {
+        await addDoc(collection(db, 'bedTreatments'), {
+          ...treatForm, admissionId: showTreatmentModal.id,
+          patientId: showTreatmentModal.patientId, patientName: showTreatmentModal.patientName,
+          wardName: showTreatmentModal.wardName, bedNo: showTreatmentModal.bedNo,
+          addedBy: auth.currentUser?.email || 'staff', createdAt,
+        });
+        setTreatForm({ type: 'Medication', description: '', date: today(), time: '08:00' });
+      }
     } catch (e: any) { await alert(e.message || 'Treatment could not be added.', 'Treatment Failed'); }
     finally { setSaving(false); }
+  };
+
+  const handleCancelPharmacyOrder = async (treatment: any) => {
+    if (!treatment.pharmacyOrderId || treatment.fulfillmentStatus !== 'pending') return;
+    setSaving(true);
+    try {
+      await runTransaction(db, async tx => {
+        const orderRef = doc(db, 'pharmacyOrders', treatment.pharmacyOrderId);
+        const treatmentRef = doc(db, 'bedTreatments', treatment.id);
+        const [orderSnap, treatmentSnap] = await Promise.all([tx.get(orderRef), tx.get(treatmentRef)]);
+        if (!orderSnap.exists() || orderSnap.data().status !== 'pending') throw new Error('This pharmacy order is no longer pending.');
+        if (!treatmentSnap.exists() || treatmentSnap.data().fulfillmentStatus !== 'pending') throw new Error('This care entry is no longer pending.');
+        const cancelledAt = nowISO();
+        tx.update(orderRef, { status: 'cancelled', cancelledAt, cancelledBy: auth.currentUser?.uid || '' });
+        tx.update(treatmentRef, { fulfillmentStatus: 'cancelled', cancelledAt, cancelledBy: auth.currentUser?.uid || '' });
+      });
+    } catch (e: any) {
+      await alert(e.message || 'The pharmacy order could not be cancelled.', 'Cancellation Failed');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const f = (k: string, v: string) => setForm(p => ({ ...p, [k]: v }));
@@ -246,20 +424,48 @@ export function IPD() {
                           <p className="text-xs text-gray-400">No entries yet.</p>
                         ) : (
                           <div className="space-y-1.5 max-h-60 overflow-y-auto">
-                            {admTreatments.sort((x: any, y: any) => (y.createdAt > x.createdAt ? 1 : -1)).map((t: any) => (
-                              <div key={t.id} className="flex items-start gap-3 bg-white rounded-lg px-3 py-2 border border-blue-100">
+                            {admTreatments.sort((x: any, y: any) => (y.createdAt > x.createdAt ? 1 : -1)).map((t: any) => {
+                              const linkedOrder = t.pharmacyOrderId ? pharmacyOrders.find(order => order.id === t.pharmacyOrderId) : null;
+                              const fulfillmentStatus = t.fulfillmentStatus || linkedOrder?.status;
+                              return <div key={t.id} className="flex items-start gap-3 bg-white rounded-lg px-3 py-2 border border-blue-100">
                                 <span className={cn('text-xs font-semibold px-2 py-0.5 rounded shrink-0',
                                   t.type === 'Medication' ? 'bg-green-100 text-green-700' :
+                                  t.type === 'Surgery / Operation' ? 'bg-rose-100 text-rose-700' :
                                   t.type === 'Procedure' ? 'bg-purple-100 text-purple-700' :
                                   t.type === 'Vitals' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600')}>
                                   {t.type}
                                 </span>
                                 <div className="flex-1 min-w-0">
-                                  <p className="text-sm text-gray-800">{t.description}</p>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="text-sm text-gray-800">{t.description}</p>
+                                    {fulfillmentStatus && (
+                                      <span className={cn('text-[10px] font-bold uppercase px-2 py-0.5 rounded-full',
+                                        fulfillmentStatus === 'fulfilled' || fulfillmentStatus === 'dispensed' ? 'bg-green-100 text-green-700' :
+                                        fulfillmentStatus === 'cancelled' ? 'bg-gray-100 text-gray-500' : 'bg-amber-100 text-amber-700')}>
+                                        {fulfillmentStatus === 'pending' ? 'Awaiting Billing' : fulfillmentStatus}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {Array.isArray(t.pharmacyItems) && t.pharmacyItems.length > 0 && (
+                                    <p className="text-xs text-gray-500 mt-1">
+                                      {t.pharmacyItems.map((item: any) => `${item.name}: ${item.quantity} ${item.sellType}${item.quantity === 1 ? '' : 's'}`).join(' | ')}
+                                    </p>
+                                  )}
                                   <p className="text-xs text-gray-400 mt-0.5">{t.date} {t.time} · {t.addedBy}</p>
+                                  {t.saleId && <p className="text-xs text-green-600 mt-1">Fulfilled by sale {t.saleId.slice(0, 10)}</p>}
                                 </div>
-                              </div>
-                            ))}
+                                {tab === 'current' && fulfillmentStatus === 'pending' && t.pharmacyOrderId && (
+                                  <button
+                                    onClick={() => handleCancelPharmacyOrder(t)}
+                                    disabled={saving}
+                                    className="p-1.5 text-red-500 hover:bg-red-50 rounded-md disabled:opacity-50"
+                                    title="Cancel pharmacy order"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>;
+                            })}
                           </div>
                         )}
                         {tab === 'current' && (
@@ -370,14 +576,14 @@ export function IPD() {
 
       {/* Treatment/Care Log Modal */}
       {showTreatmentModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md">
+        <div className="fixed inset-0 bg-black/50 flex items-start justify-center z-50 p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-3xl my-4">
             <div className="flex items-center justify-between p-5 border-b border-gray-100">
               <div>
                 <h2 className="font-semibold text-gray-900">Add Treatment Entry</h2>
                 <p className="text-xs text-gray-400 mt-0.5">{showTreatmentModal.patientName} · Bed {showTreatmentModal.bedNo}</p>
               </div>
-              <button onClick={() => setShowTreatmentModal(null)}><X className="w-5 h-5 text-gray-400" /></button>
+              <button onClick={closeTreatmentModal}><X className="w-5 h-5 text-gray-400" /></button>
             </div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
@@ -400,11 +606,95 @@ export function IPD() {
                 </div>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-600 mb-1">Description / Details *</label>
+                <label className="block text-xs font-medium text-gray-600 mb-1">{isPharmacyTreatment ? 'Notes (optional)' : 'Description / Details *'}</label>
                 <textarea value={treatForm.description} onChange={e => setTreatForm(f => ({ ...f, description: e.target.value }))} rows={3}
                   placeholder="e.g. Tab Paracetamol 500mg — 1 tablet BD after meals"
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
+              {isPharmacyTreatment && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+                    <ShoppingCart className="w-4 h-4 shrink-0" />
+                    Selected items will be sent to Pharmacy Billing. Stock changes only when Billing checkout is completed.
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Pharmacy inventory</label>
+                    <div className="relative mb-2">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input
+                        value={medicineSearch}
+                        onChange={e => setMedicineSearch(e.target.value)}
+                        placeholder="Filter medicines or items..."
+                        className="w-full border border-gray-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                    </div>
+                    <div className="border border-gray-200 rounded-lg max-h-44 overflow-y-auto divide-y divide-gray-100">
+                      {filteredMedicines.map(medicine => {
+                        const selected = pharmacyItems.some(item => item.medicineId === medicine.id);
+                        return (
+                          <div key={medicine.id} className="flex items-center gap-3 px-3 py-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-800 truncate">{medicine.name}</p>
+                              <p className="text-xs text-gray-400">{medicine.category || 'Other'} | Stock: {Number(medicine.stock || 0)} unit(s)</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => addPharmacyItem(medicine)}
+                              disabled={selected}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md disabled:text-green-600 disabled:bg-green-50"
+                              title={selected ? 'Item selected' : 'Add item'}
+                            >
+                              {selected ? <CheckCircle className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {filteredMedicines.length === 0 && <p className="px-3 py-6 text-center text-sm text-gray-400">No in-stock items found.</p>}
+                    </div>
+                  </div>
+                  {pharmacyItems.length > 0 && (
+                    <div className="border border-gray-200 rounded-lg divide-y divide-gray-100">
+                      {pharmacyItems.map(item => {
+                        const units = requestedUnits(item);
+                        const overStock = units > item.stock;
+                        return (
+                          <div key={item.medicineId} className="grid grid-cols-[minmax(0,1fr)_95px_90px_32px] gap-2 items-center px-3 py-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-800 truncate">{item.name}</p>
+                              <p className={`text-xs ${overStock ? 'text-red-600 font-medium' : 'text-gray-400'}`}>{units} unit(s) requested | {item.stock} available</p>
+                            </div>
+                            <select
+                              value={item.sellType}
+                              onChange={e => updatePharmacyItem(item.medicineId, { sellType: e.target.value as 'unit' | 'box' })}
+                              className="border border-gray-200 rounded-md px-2 py-1.5 text-xs"
+                            >
+                              <option value="unit">Unit</option>
+                              <option value="box" disabled={item.unitsPerBox <= 1 || item.stock < item.unitsPerBox}>Box</option>
+                            </select>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={item.quantity}
+                              onChange={e => updatePharmacyItem(item.medicineId, { quantity: Math.max(1, Math.floor(Number(e.target.value) || 1)) })}
+                              className={`w-full border rounded-md px-2 py-1.5 text-xs ${overStock ? 'border-red-300 bg-red-50' : 'border-gray-200'}`}
+                              aria-label={`Quantity for ${item.name}`}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setPharmacyItems(items => items.filter(selected => selected.medicineId !== item.medicineId))}
+                              className="p-1.5 text-red-500 hover:bg-red-50 rounded-md"
+                              title="Remove item"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
               {/* Recent entries */}
               {treatments.filter(t => t.admissionId === showTreatmentModal.id).slice(0, 3).map((t: any) => (
                 <div key={t.id} className="text-xs bg-gray-50 rounded-lg px-3 py-2 flex items-center gap-2">
@@ -415,9 +705,9 @@ export function IPD() {
               ))}
             </div>
             <div className="flex gap-3 px-5 pb-5">
-              <button onClick={() => setShowTreatmentModal(null)} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm">Close</button>
+              <button onClick={closeTreatmentModal} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm">Close</button>
               <button onClick={handleAddTreatment} disabled={saving} className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-sm disabled:opacity-60">
-                {saving ? 'Saving...' : 'Add Entry'}
+                {saving ? 'Saving...' : isPharmacyTreatment ? 'Send to Pharmacy' : 'Add Entry'}
               </button>
             </div>
           </div>
@@ -438,6 +728,12 @@ export function IPD() {
                 <div className="text-sm text-orange-600">{showDischarge.wardName} · Bed {showDischarge.bedNo}</div>
                 <div className="text-sm text-orange-600">Admitted: {formatDate(showDischarge.admissionDate)}</div>
               </div>
+              {pharmacyOrders.some(order => order.admissionId === showDischarge.id && order.fulfillmentMode === 'billing' && order.status === 'pending') && (
+                <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                  <AlertTriangle className="w-4 h-4 shrink-0" />
+                  Complete or cancel all pending IPD pharmacy orders before discharging this patient.
+                </div>
+              )}
               <div>
                 <label className="block text-xs font-medium text-gray-600 mb-1">Discharge Date</label>
                 <input type="date" value={dischargeDate} onChange={e => setDischargeDate(e.target.value)}
@@ -459,7 +755,7 @@ export function IPD() {
             </div>
             <div className="flex gap-3 px-5 pb-5">
               <button onClick={() => setShowDischarge(null)} className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm">Cancel</button>
-              <button onClick={handleDischarge} disabled={saving} className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm disabled:opacity-60">{saving ? '...' : 'Confirm Discharge'}</button>
+              <button onClick={handleDischarge} disabled={saving || pharmacyOrders.some(order => order.admissionId === showDischarge.id && order.fulfillmentMode === 'billing' && order.status === 'pending')} className="flex-1 bg-red-600 text-white py-2 rounded-lg text-sm disabled:opacity-60">{saving ? '...' : 'Confirm Discharge'}</button>
             </div>
           </div>
         </div>

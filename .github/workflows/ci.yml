@@ -7,9 +7,16 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  build:
-    runs-on: windows-latest
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VITE_API_BASE_URL: /api
 
     steps:
       - name: Checkout
@@ -22,9 +29,9 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
-      - name: Write Firebase config from secrets
+      - name: Write Firebase public config
         env:
           FIREBASE_CONFIG_JSON: ${{ secrets.FIREBASE_CONFIG_JSON }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
@@ -37,8 +44,74 @@ jobs:
         run: node scripts/write-firebase-config.mjs
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        run: npm run lint
 
-      - name: Build Vite app (verify it compiles)
+      - name: Build web application
         run: npm run build
 
+      - name: Verify Hostinger web output
+        shell: bash
+        run: |
+          test -f dist/.htaccess
+          test -f dist/index.html
+          test -f dist/logo.png
+          test -d dist/assets
+          test -d dist/api
+          if grep -RIE "firestore\.googleapis\.com|google\.firestore\.v1|Firestore/Listen/channel" dist/assets; then
+            echo "Compiled frontend still contains a Firestore document transport endpoint."
+            exit 1
+          fi
+
+  backend:
+    name: PHP and MariaDB tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: gmh_test_root
+          MARIADB_DATABASE: gmh_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, fileinfo, json, mbstring, openssl, pdo_mysql, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate Composer files
+        working-directory: backend
+        run: composer validate --strict
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Audit backend dependencies
+        working-directory: backend
+        run: composer audit
+
+      - name: Lint PHP
+        working-directory: backend
+        run: composer lint
+
+      - name: Run unit and MariaDB integration tests
+        working-directory: backend
+        env:
+          TEST_DB_DSN: mysql:host=127.0.0.1;port=3306;dbname=gmh_test;charset=utf8mb4
+          TEST_DB_USER: root
+          TEST_DB_PASSWORD: gmh_test_root
+        run: composer test

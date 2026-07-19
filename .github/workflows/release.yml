@@ -1,4 +1,4 @@
-name: Release
+name: Build Release Artifacts
 
 on:
   push:
@@ -7,15 +7,37 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release (e.g. 3.1.0) — leave empty to use package.json version'
+        description: 'Expected package.json version (leave blank to use package.json)'
         required: false
+        type: string
+      api_base_url:
+        description: 'Absolute Hostinger API URL for Android and Windows, for example https://hospital.example.com/api'
+        required: false
+        type: string
+      deploy_hostinger:
+        description: 'Deploy the tested frontend and backend to Hostinger'
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
+concurrency:
+  group: gmh-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '22'
+  NATIVE_API_BASE_URL: ${{ inputs.api_base_url || vars.VITE_API_BASE_URL }}
+
 jobs:
-  release-windows:
-    runs-on: windows-latest
+  web:
+    name: Web and Hostinger frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      VITE_API_BASE_URL: /api
 
     steps:
       - name: Checkout
@@ -24,13 +46,27 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
+      - name: Resolve and validate version
+        shell: bash
+        run: |
+          APP_VERSION="$(node -p "require('./package.json').version")"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$APP_VERSION" ]; then
+            echo "Requested version ${{ inputs.version }} does not match package.json $APP_VERSION."
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]] && [ "${GITHUB_REF_NAME#v}" != "$APP_VERSION" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match package.json $APP_VERSION."
+            exit 1
+          fi
 
-      - name: Write Firebase config from secrets
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write Firebase public config
         env:
           FIREBASE_CONFIG_JSON: ${{ secrets.FIREBASE_CONFIG_JSON }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
@@ -42,46 +78,229 @@ jobs:
           FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
         run: node scripts/write-firebase-config.mjs
 
-      - name: Build Vite app
+      - name: TypeScript check
+        run: npm run lint
+
+      - name: Build web application
         run: npm run build
 
-      - name: Build Windows installer
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # --publish never: we upload manually via softprops below
-        run: npx electron-builder --win --publish never
+      - name: Verify web build and Firestore cutover
+        shell: bash
+        run: |
+          test -f dist/.htaccess
+          test -f dist/index.html
+          test -f dist/logo.png
+          test -d dist/assets
+          test -d dist/api
+          if grep -RIE "firestore\.googleapis\.com|google\.firestore\.v1|Firestore/Listen/channel" dist/assets; then
+            echo "Compiled frontend still contains a Firestore document transport endpoint."
+            exit 1
+          fi
 
-      - name: List release output
-        run: Get-ChildItem -Recurse release | Select-Object FullName, Length
+      - name: Package Hostinger frontend
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          (cd dist && zip -qr "../artifacts/gmh-hostinger-subdomain-v${APP_VERSION}.zip" .)
+          ZIP="artifacts/gmh-hostinger-subdomain-v${APP_VERSION}.zip"
+          unzip -Z1 "$ZIP" | grep -Fx '.htaccess'
+          unzip -Z1 "$ZIP" | grep -Fx 'index.html'
+          unzip -Z1 "$ZIP" | grep -Fx 'logo.png'
+          unzip -Z1 "$ZIP" | grep -q '^assets/'
+          unzip -Z1 "$ZIP" | grep -q '^api/'
 
-      - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Hostinger frontend
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: ${{ github.ref_name }}
-          name: GMH Suite ${{ github.ref_name }}
-          body: |
-            ## GMH Suite ${{ github.ref_name }}
+          name: hostinger-frontend
+          path: artifacts/gmh-hostinger-subdomain-v*.zip
+          if-no-files-found: error
+          retention-days: 30
 
-            ### Installation
-            - **New install:** Download `GMH-Suite-Setup-*.exe` and run it
-            - **Portable:** Download `GMH-Suite-*.exe` (no install needed)
-
-            ### Auto-update
-            Existing installs will be notified automatically on next launch.
-
-            ### What's changed
-          generate_release_notes: true
-          draft: false
-          prerelease: false
-          fail_on_unmatched_files: false
-          files: |
-            release/*.exe
-            release/*.yml
-            release/*.yaml
-            release/*.blockmap
-
-  release-android:
+  backend:
+    name: PHP, MariaDB, and Hostinger backend
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      mariadb:
+        image: mariadb:11.4
+        env:
+          MARIADB_ROOT_PASSWORD: gmh_test_root
+          MARIADB_DATABASE: gmh_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve and validate version
+        shell: bash
+        run: |
+          APP_VERSION="$(node -p "require('./package.json').version")"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$APP_VERSION" ]; then
+            echo "Requested version ${{ inputs.version }} does not match package.json $APP_VERSION."
+            exit 1
+          fi
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: curl, fileinfo, json, mbstring, openssl, pdo_mysql, pdo_sqlite, sodium
+          coverage: none
+          tools: composer:v2
+
+      - name: Validate and install Composer dependencies
+        working-directory: backend
+        run: |
+          composer validate --strict
+          composer install --no-interaction --prefer-dist
+          composer audit
+
+      - name: Lint and test backend
+        working-directory: backend
+        env:
+          TEST_DB_DSN: mysql:host=127.0.0.1;port=3306;dbname=gmh_test;charset=utf8mb4
+          TEST_DB_USER: root
+          TEST_DB_PASSWORD: gmh_test_root
+        run: |
+          composer lint
+          composer test
+
+      - name: Install production backend dependencies
+        working-directory: backend
+        run: composer install --no-dev --classmap-authoritative --no-interaction --prefer-dist
+
+      - name: Package Hostinger backend
+        shell: bash
+        run: |
+          test -f backend/vendor/autoload.php
+          mkdir -p artifacts
+          (cd backend && zip -qr "../artifacts/gmh-hostinger-backend-v${APP_VERSION}.zip" . \
+            -x '.env' '.phpunit.cache/*')
+          ZIP="artifacts/gmh-hostinger-backend-v${APP_VERSION}.zip"
+          unzip -Z1 "$ZIP" | grep -Fx 'public/index.php'
+          unzip -Z1 "$ZIP" | grep -Fx 'database/schema.sql'
+          unzip -Z1 "$ZIP" | grep -Fx 'vendor/autoload.php'
+          if unzip -Z1 "$ZIP" | grep -Ei '(^|/)\.env$|service[-_]?account.*\.json$|gmh-suite-backup.*\.json$'; then
+            echo "Backend archive contains a private environment, service account, or data backup."
+            exit 1
+          fi
+
+      - name: Upload Hostinger backend
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostinger-backend
+          path: artifacts/gmh-hostinger-backend-v*.zip
+          if-no-files-found: error
+          retention-days: 30
+
+  deploy_hostinger:
+    name: Deploy web and API to Hostinger
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.deploy_hostinger }}
+    needs: [web, backend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+      SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+      SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.HOSTINGER_SSH_KNOWN_HOSTS }}
+      FRONTEND_PATH: ${{ vars.HOSTINGER_FRONTEND_PATH }}
+      BACKEND_PATH: ${{ vars.HOSTINGER_BACKEND_PATH }}
+      HEALTH_URL: ${{ vars.HOSTINGER_HEALTH_URL }}
+
+    steps:
+      - name: Download Hostinger frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: hostinger-frontend
+          path: deployment/frontend-archive
+
+      - name: Download Hostinger backend
+        uses: actions/download-artifact@v4
+        with:
+          name: hostinger-backend
+          path: deployment/backend-archive
+
+      - name: Extract deployment archives
+        shell: bash
+        run: |
+          mkdir -p deployment/frontend deployment/backend
+          unzip -q deployment/frontend-archive/gmh-hostinger-subdomain-v*.zip -d deployment/frontend
+          unzip -q deployment/backend-archive/gmh-hostinger-backend-v*.zip -d deployment/backend
+          test -f deployment/frontend/index.html
+          test -f deployment/frontend/.htaccess
+          test -f deployment/backend/public/index.php
+          test ! -f deployment/backend/.env
+
+      - name: Configure trusted SSH connection
+        shell: bash
+        run: |
+          : "${SSH_HOST:?Add HOSTINGER_SSH_HOST to the production environment secrets}"
+          : "${SSH_PORT:?Add HOSTINGER_SSH_PORT to the production environment secrets}"
+          : "${SSH_USER:?Add HOSTINGER_SSH_USER to the production environment secrets}"
+          : "${SSH_PRIVATE_KEY:?Add HOSTINGER_SSH_PRIVATE_KEY to the production environment secrets}"
+          : "${FRONTEND_PATH:?Add HOSTINGER_FRONTEND_PATH to the production environment variables}"
+          : "${BACKEND_PATH:?Add HOSTINGER_BACKEND_PATH to the production environment variables}"
+          : "${HEALTH_URL:?Add HOSTINGER_HEALTH_URL to the production environment variables}"
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ "$FRONTEND_PATH" =~ ^/home/[A-Za-z0-9_-]+/domains/[A-Za-z0-9.-]+/public_html/[A-Za-z0-9._/-]+$ ]]
+          [[ "$BACKEND_PATH" =~ ^/home/[A-Za-z0-9_-]+/domains/[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$ ]]
+          [[ "$HEALTH_URL" =~ ^https://.+/api/v1/health$ ]]
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -T 20 -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          test -s ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Verify Hostinger SSH access
+        shell: bash
+        run: |
+          ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "test -d '$FRONTEND_PATH' && test -d '$BACKEND_PATH' && test -f '$BACKEND_PATH/.env'"
+
+      - name: Deploy backend while preserving private configuration
+        shell: bash
+        run: |
+          rsync -rlvz --checksum --exclude='.env' \
+            -e "ssh -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            deployment/backend/ "$SSH_USER@$SSH_HOST:$BACKEND_PATH/"
+
+      - name: Deploy frontend assets before entry files
+        shell: bash
+        run: |
+          rsync -rlvz --checksum --exclude='index.html' --exclude='.htaccess' \
+            -e "ssh -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            deployment/frontend/ "$SSH_USER@$SSH_HOST:$FRONTEND_PATH/"
+          rsync -rlvz --checksum \
+            -e "ssh -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            deployment/frontend/index.html deployment/frontend/.htaccess \
+            "$SSH_USER@$SSH_HOST:$FRONTEND_PATH/"
+
+      - name: Verify production health
+        shell: bash
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-delay 3 --retry-all-errors "$HEALTH_URL"
+
+  windows:
+    name: Windows installer and portable app
+    runs-on: windows-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -90,10 +309,83 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
-      - name: Setup Java
+      - name: Resolve version and validate API URL
+        shell: pwsh
+        run: |
+          $version = node -p "require('./package.json').version"
+          "APP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ('${{ inputs.version }}' -and '${{ inputs.version }}' -ne $version) {
+            throw "Requested version ${{ inputs.version }} does not match package.json $version."
+          }
+          if ($env:NATIVE_API_BASE_URL -notmatch '^https://.+/api/?$') {
+            throw 'Set workflow input api_base_url or repository variable VITE_API_BASE_URL to the absolute Hostinger HTTPS API URL.'
+          }
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Write Firebase public config
+        env:
+          FIREBASE_CONFIG_JSON: ${{ secrets.FIREBASE_CONFIG_JSON }}
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
+          FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
+        run: node scripts/write-firebase-config.mjs
+
+      - name: TypeScript check and build
+        env:
+          VITE_API_BASE_URL: ${{ env.NATIVE_API_BASE_URL }}
+        run: |
+          npm run lint
+          npm run build
+
+      - name: Build Windows artifacts
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          VITE_API_BASE_URL: ${{ env.NATIVE_API_BASE_URL }}
+        run: npx electron-builder --win --publish never
+
+      - name: Verify Windows output
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "release/GMH-Suite-Setup-$env:APP_VERSION.exe")) { throw 'Windows installer is missing.' }
+          if (-not (Test-Path "release/GMH-Suite-$env:APP_VERSION.exe")) { throw 'Windows portable app is missing.' }
+          Get-ChildItem release -File | Select-Object Name, Length
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+          if-no-files-found: error
+          retention-days: 30
+
+  android:
+    name: Android APK with Java 21
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Setup Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -102,13 +394,30 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install Android SDK packages
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Resolve version and validate API URL
+        shell: bash
+        run: |
+          APP_VERSION="$(node -p "require('./package.json').version")"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.version }}" ] && [ "${{ inputs.version }}" != "$APP_VERSION" ]; then
+            echo "Requested version ${{ inputs.version }} does not match package.json $APP_VERSION."
+            exit 1
+          fi
+          if [[ ! "$NATIVE_API_BASE_URL" =~ ^https://.+/api/?$ ]]; then
+            echo "Set workflow input api_base_url or repository variable VITE_API_BASE_URL to the absolute Hostinger HTTPS API URL ending in /api."
+            exit 1
+          fi
 
       - name: Install dependencies
-        run: npm install --legacy-peer-deps
+        run: npm ci
 
-      - name: Write Firebase config from secrets
+      - name: Write Firebase public config
         env:
           FIREBASE_CONFIG_JSON: ${{ secrets.FIREBASE_CONFIG_JSON }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
@@ -120,23 +429,54 @@ jobs:
           FIREBASE_MEASUREMENT_ID: ${{ secrets.FIREBASE_MEASUREMENT_ID }}
         run: node scripts/write-firebase-config.mjs
 
-      - name: Build Vite app
-        run: npm run build
+      - name: Build and sync Capacitor app
+        env:
+          VITE_API_BASE_URL: ${{ env.NATIVE_API_BASE_URL }}
+        run: |
+          npm run lint
+          npm run build
+          npx cap sync android
+          chmod +x android/gradlew
 
-      - name: Sync Android project
-        run: npx cap sync android
-
-      - name: Make Gradle wrapper executable
-        run: chmod +x android/gradlew
-
-      - name: Build Android debug APK
+      - name: Test and build Android APK
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: ./gradlew testDebugUnitTest assembleDebug --stacktrace
 
-      - name: Rename Android APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk GMH-Suite-${{ github.ref_name }}-android-debug.apk
+      - name: Verify and name Android APK
+        shell: bash
+        run: |
+          APK='android/app/build/outputs/apk/debug/app-debug.apk'
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging "$APK" | grep "versionName='$APP_VERSION'"
+          mkdir -p artifacts
+          cp "$APK" "artifacts/GMH-Suite-${APP_VERSION}-android-debug.apk"
 
-      - name: Upload Android APK to GitHub Release
+      - name: Upload Android APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: artifacts/GMH-Suite-*-android-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish tagged GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [web, backend, windows, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: find release-assets -maxdepth 2 -type f -printf '%P\n' | sort
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
@@ -144,6 +484,5 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: false
-          fail_on_unmatched_files: false
-          files: GMH-Suite-${{ github.ref_name }}-android-debug.apk
-
+          fail_on_unmatched_files: true
+          files: release-assets/*

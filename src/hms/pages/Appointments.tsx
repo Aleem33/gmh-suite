@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, doc, getDoc, query, where, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, doc, getDoc, query, where, getDocs, runTransaction } from '../../lib/firestoreCompat';
 import { db, auth, getNextMRN, getNextBillNo } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
@@ -208,17 +208,27 @@ export function Appointments() {
       }
 
       if (isIpdCheckIn) {
-        const ref = await addDoc(collection(db, 'admissions'), {
-          patientId, patientName, patientMRN, patientAge, patientGender,
-          ...admissionForm,
-          dailyRate: Number(admissionForm.dailyRate) || 0,
-          admissionDate: checkInDate,
-          status: 'admitted',
-          source: 'reception',
-          checkedInAt: nowISO(),
-          createdAt: nowISO(),
+        const ref = doc(collection(db, 'admissions'));
+        await runTransaction(db, async tx => {
+          if (admissionForm.bedId) {
+            const bedRef = doc(db, 'beds', admissionForm.bedId);
+            const bedSnapshot = await tx.get(bedRef);
+            if (!bedSnapshot.exists() || bedSnapshot.data().status === 'occupied') {
+              throw new Error('This bed is no longer available. Select another bed.');
+            }
+            tx.update(bedRef, { status: 'occupied', updatedAt: nowISO() });
+          }
+          tx.set(ref, {
+            patientId, patientName, patientMRN, patientAge, patientGender,
+            ...admissionForm,
+            dailyRate: Number(admissionForm.dailyRate) || 0,
+            admissionDate: checkInDate,
+            status: 'admitted',
+            source: 'reception',
+            checkedInAt: nowISO(),
+            createdAt: nowISO(),
+          });
         });
-        if (admissionForm.bedId) await updateDoc(doc(db, 'beds', admissionForm.bedId), { status: 'occupied', updatedAt: nowISO() });
         await logAudit('create', 'admission', ref.id, `${patientName} direct IPD via reception`);
         setShowModal(false);
         return;
@@ -230,27 +240,33 @@ export function Appointments() {
       const balance = Math.max(0, fee - paid);
       const paymentStatus = paid >= fee ? 'paid' : paid > 0 ? 'partial' : 'pending';
 
-      const apptRef = await addDoc(collection(db, 'appointments'), {
+      const apptRef = doc(collection(db, 'appointments'));
+      const appointmentData = {
         ...apptForm, date: checkInDate, time: checkInTime, fee, paidAmount: paid, tokenNo,
         patientId, patientName, patientMRN, patientAge, patientGender,
         vitals: {}, status: 'vitals_pending', checkedInAt: nowISO(), createdAt: nowISO(),
-      });
+      };
       if (isOpdLikeCheckIn && fee > 0) {
         const billNo = await getNextBillNo();
-        const billRef = await addDoc(collection(db, 'bills'), {
-          billNo,
-          patientId, patientName, patientMRN,
-          date: checkInDate,
-          items: [{ description: `OPD Consultation - ${apptForm.department}`, category: 'Consultation', quantity: 1, rate: fee, amount: fee }],
-          subtotal: fee, discount: 0, total: fee,
-          paid, balance, paymentStatus, paymentMethod: apptForm.paymentMethod,
-          appointmentId: apptRef.id,
-          cashierId: auth.currentUser?.uid || '',
-          cashierName: auth.currentUser?.email || '',
-          createdAt: nowISO(),
+        const billRef = doc(collection(db, 'bills'));
+        await runTransaction(db, async tx => {
+          tx.set(apptRef, { ...appointmentData, billId: billRef.id, billNo, updatedAt: nowISO() });
+          tx.set(billRef, {
+            billNo,
+            patientId, patientName, patientMRN,
+            date: checkInDate,
+            items: [{ description: `OPD Consultation - ${apptForm.department}`, category: 'Consultation', quantity: 1, rate: fee, amount: fee }],
+            subtotal: fee, discount: 0, total: fee,
+            paid, balance, paymentStatus, paymentMethod: apptForm.paymentMethod,
+            appointmentId: apptRef.id,
+            cashierId: auth.currentUser?.uid || '',
+            cashierName: auth.currentUser?.email || '',
+            createdAt: nowISO(),
+          });
         });
-        await updateDoc(doc(db, 'appointments', apptRef.id), { billId: billRef.id, billNo, updatedAt: nowISO() });
         await logAudit('create', 'bill', billRef.id, `${billNo} - ${patientName} - Rs.${fee} (Reception OPD)`);
+      } else {
+        await runTransaction(db, async tx => { tx.set(apptRef, appointmentData); });
       }
       await logAudit('create', 'appointment', apptRef.id, `${patientName} - ${apptForm.type} - ${checkInDate} ${checkInTime}`);
 

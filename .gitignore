@@ -1,4 +1,7 @@
 node_modules/
+backend/vendor/
+backend/.env
+backend/.phpunit.cache/
 dist/
 release/
 gmh-suite/
@@ -9,3 +12,16 @@ firebase-applet-config.json
 !.env.example
 *.log
 .DS_Store
+
+# Generated Hostinger deployment artifacts and extracted upload folders
+gmh-hostinger-*.zip
+gmh-hostinger-subdomain-v*/
+gmh-hostinger-backend-v*/
+gmhapi-bridge-v*.zip
+gmhapi-bridge-v*/
+gmh-path-check-*.php
+
+# Production data and Firebase Admin credentials must never enter Git
+gmh-suite-backup-*.json
+*firebase-adminsdk*.json
+*service-account*.json

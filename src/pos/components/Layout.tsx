@@ -5,6 +5,7 @@ import {
   LayoutDashboard, ShoppingCart, Pill, Users, Truck,
   BarChart3, Settings, LogOut, UserCog, History, Receipt,
   PackagePlus, RotateCcw, Menu, X, ClipboardList,
+  Shield, FileText,
 } from 'lucide-react';
 import { logout } from '../../firebase';
 import { cn } from '../lib/utils';
@@ -13,6 +14,7 @@ import { roleOrPermission, type UserProfile } from '../../lib/permissions';
 const allNavItems = [
   { to: '/',                 icon: LayoutDashboard, label: 'Dashboard',        roles: ['admin', 'pharmacist'] },
   { to: '/billing',          icon: ShoppingCart,    label: 'Billing',          roles: ['admin', 'cashier'], permission: 'pos.billing.create' },
+  { to: '/quotations',       icon: FileText,        label: 'Quotations',       roles: ['admin'], permissions: ['pos.quotations.view', 'pos.quotations.create'] },
   { to: '/patient-history',  icon: ClipboardList,   label: 'Patient Rx',       roles: ['admin', 'pharmacist', 'cashier'] },
   { to: '/purchases',        icon: PackagePlus,     label: 'Purchases',        roles: ['admin', 'pharmacist'], permissions: ['pos.purchases.view', 'pos.purchases.create'] },
   { to: '/purchase-returns', icon: RotateCcw,       label: 'Purchase Returns', roles: ['admin', 'pharmacist'], permission: 'pos.purchaseReturns.view' },
@@ -23,6 +25,7 @@ const allNavItems = [
   { to: '/suppliers',        icon: Truck,           label: 'Suppliers',        roles: ['admin', 'pharmacist'], permissions: ['pos.suppliers.view', 'pos.suppliers.create'] },
   { to: '/expenses',         icon: Receipt,         label: 'Expenses',         roles: ['admin'], permissions: ['pos.expenses.view', 'pos.expenses.create'] },
   { to: '/reports',          icon: BarChart3,       label: 'Reports',          roles: ['admin'], permission: 'pos.reports.view' },
+  { to: '/audit',            icon: Shield,          label: 'Audit',            roles: ['admin'] },
   { to: '/users',            icon: UserCog,         label: 'Users',            roles: ['admin'] },
   { to: '/settings',         icon: Settings,        label: 'Settings',         roles: ['admin'] },
 ];
@@ -34,7 +37,9 @@ interface Props {
 }
 
 export function Layout({ role, userProfile, onLogout }: Props) {
-  const navItems = allNavItems.filter(item => roleOrPermission(role, item.roles, userProfile, (item as any).permissions || (item as any).permission || []));
+  const navItems = allNavItems.filter(item => (
+    item.to === '/quotations' && userProfile?.username === 'haseeb'
+  ) || roleOrPermission(role, item.roles, userProfile, (item as any).permissions || (item as any).permission || []));
   const [drawerOpen, setDrawerOpen] = useState(false);
   const handleLogout = onLogout || logout;
 

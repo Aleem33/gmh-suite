@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy } from '../../lib/firestoreCompat';
 import { db } from '../../firebase';
 import { Search, User, Pill, ClipboardList, ChevronDown, ChevronUp, Calendar, Stethoscope } from 'lucide-react';
 

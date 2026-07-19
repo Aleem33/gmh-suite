@@ -1,5 +1,7 @@
 # Hostinger Subdomain Deployment
 
+> Version 3.2.0 uses the Hostinger MySQL API. Follow `MYSQL_HOSTINGER_DEPLOYMENT.md` for the database, private PHP backend, import, cron, coordinated cutover, and rollback steps. The notes below describe only the public frontend folder.
+
 Use this when the main business website must stay on the root domain and GMH Suite should run on a Hostinger subdomain such as `gmh.yourdomain.com`.
 
 ## Hostinger Setup
@@ -26,7 +28,9 @@ The deployable files are created in `dist`.
 
 The included `public/.htaccess` is copied into `dist` during the build. It keeps Hostinger from returning 404 for app paths and lets the React app load `index.html`.
 
-## Firebase Auth
+For a verified release without installing Java 21 or the Android SDK locally, run the repository's **Build Release Artifacts** GitHub workflow. Set its `api_base_url` input to the absolute Hostinger URL ending in `/api`. Download `hostinger-frontend` and upload the contents of `gmh-hostinger-subdomain-v3.2.0.zip`; `.htaccess`, `index.html`, `logo.png`, `assets/`, and `api/` are already at the archive root. Full workflow setup is documented in `MYSQL_HOSTINGER_DEPLOYMENT.md`.
+
+## Firebase Auth And MySQL API
 
 Firebase must trust the subdomain before employee login works:
 
@@ -37,6 +41,8 @@ Firebase must trust the subdomain before employee login works:
 5. Add `gmh.yourdomain.com`.
 
 Replace `yourdomain.com` with the real business domain.
+
+The frontend also requires `/api/v1/health` on the same subdomain. Android and Windows builds use the absolute HTTPS API URL configured through `VITE_API_BASE_URL`.
 
 ## Test
 

@@ -1,0 +1,6 @@
+Options -Indexes
+RewriteEngine On
+SetEnv GMH_BACKEND_ROOT /home/u457184656/domains/aleemcore.com/gmh-backend
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]

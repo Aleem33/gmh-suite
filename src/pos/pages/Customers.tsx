@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, increment, query, orderBy, getDocs, where
-} from 'firebase/firestore';
+  doc, increment, query, orderBy, getDocs, where, runTransaction
+} from '../../lib/firestoreCompat';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import { printOrShare } from '../lib/nativeUtils';
@@ -136,19 +136,34 @@ export function Customers({ userProfile }: CustomersProps) {
         setTimeout(() => setSuccessMsg(''), 5000);
         return;
       }
-      await addDoc(collection(db, 'customerPayments'), {
-        customerId: customer.id,
-        customerName: customer.name,
-        saleId: sale.id,
-        amount,
-        note: paymentNote || '',
-        date: new Date().toISOString(),
+      const paymentRef = doc(collection(db, 'customerPayments'));
+      await runTransaction(db, async tx => {
+        const saleRef = doc(db, 'sales', sale.id);
+        const customerRef = doc(db, 'customers', customer.id);
+        const saleSnapshot = await tx.get(saleRef);
+        const customerSnapshot = await tx.get(customerRef);
+        if (!saleSnapshot.exists() || !customerSnapshot.exists()) {
+          throw new Error('The sale or customer record no longer exists.');
+        }
+        const currentSale = saleSnapshot.data();
+        const currentPending = Number(currentSale.pendingAmount || 0);
+        if (amount > currentPending) {
+          throw new Error(`Only ${formatCurrency(currentPending)} remains pending on this receipt.`);
+        }
+        tx.set(paymentRef, {
+          customerId: customer.id,
+          customerName: customer.name,
+          saleId: sale.id,
+          amount,
+          note: paymentNote || '',
+          date: new Date().toISOString(),
+        });
+        tx.update(saleRef, {
+          pendingAmount: currentPending - amount,
+          amountPaid: Math.min(Number(currentSale.total || 0), Number(currentSale.amountPaid || 0) + amount),
+        });
+        tx.update(customerRef, { creditBalance: increment(-amount) });
       });
-      await updateDoc(doc(db, 'sales', sale.id), {
-        pendingAmount: maxPayable - amount,
-        amountPaid: Math.min(sale.total || 0, (sale.amountPaid || 0) + amount),
-      });
-      await updateDoc(doc(db, 'customers', customer.id), { creditBalance: increment(-amount) });
 
       const remainingBalance = maxPayable - amount;
       setPaymentModal(null); setPaymentAmount(''); setPaymentNote('');

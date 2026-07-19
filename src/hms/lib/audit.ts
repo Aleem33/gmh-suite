@@ -1,4 +1,4 @@
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { addDoc, collection, serverTimestamp } from '../../lib/firestoreCompat';
 import { db, auth } from '../../firebase';
 
 // ── Audit Log ────────────────────────────────────────────────

@@ -1,5 +1,4 @@
-import { collection, doc, getDocs, writeBatch } from 'firebase/firestore';
-import { auth, db } from '../firebase';
+import { apiRequest, createIdempotencyKey } from './hostingerApi';
 
 export const GLOBAL_DATA_COLLECTIONS = [
   'settings',
@@ -29,6 +28,7 @@ export const GLOBAL_DATA_COLLECTIONS = [
   'sales',
   'saleReturns',
   'posSales',
+  'quotations',
   'customers',
   'customerPayments',
   'approvalRequests',
@@ -54,39 +54,9 @@ function getRestoreCollections(collections: Record<string, any[]>) {
   return [...known, ...extra];
 }
 
-async function commitInChunks<T>(
-  docs: T[],
-  writeChunk: (batch: ReturnType<typeof writeBatch>, item: T) => void,
-) {
-  for (let i = 0; i < docs.length; i += 400) {
-    const batch = writeBatch(db);
-    docs.slice(i, i + 400).forEach(item => writeChunk(batch, item));
-    await batch.commit();
-  }
-}
-
-function getResetCollections() {
-  return [
-    ...GLOBAL_DATA_COLLECTIONS.filter(name => name !== 'users'),
-    'users',
-  ];
-}
-
 export async function exportAllAppData(onProgress?: ProgressFn): Promise<BackupFile> {
-  const backup: BackupFile = {
-    exportedAt: new Date().toISOString(),
-    version: '2.0',
-    scope: 'gmh-suite',
-    collections: {},
-  };
-
-  for (const collectionName of GLOBAL_DATA_COLLECTIONS) {
-    onProgress?.(`Exporting ${collectionName}...`);
-    const snap = await getDocs(collection(db, collectionName));
-    backup.collections[collectionName] = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
-  }
-
-  return backup;
+  onProgress?.('Exporting MySQL data...');
+  return apiRequest<BackupFile>('/admin/backup');
 }
 
 export async function restoreAllAppData(backup: BackupFile, onProgress?: ProgressFn) {
@@ -94,44 +64,37 @@ export async function restoreAllAppData(backup: BackupFile, onProgress?: Progres
     throw new Error('Invalid backup file.');
   }
 
-  let totalDocs = 0;
-  for (const collectionName of getRestoreCollections(backup.collections)) {
-    const docs = backup.collections[collectionName] || [];
-    if (!docs.length) continue;
+  onProgress?.('Validating and importing into MySQL...');
+  const response = await apiRequest<{ importedDocuments: number }>('/admin/import', {
+    method: 'POST',
+    body: JSON.stringify({ backup, replace: false }),
+    idempotencyKey: createIdempotencyKey('backup-import'),
+  });
+  return response.importedDocuments;
+}
 
-    onProgress?.(`Importing ${collectionName} (${docs.length} records)...`);
-    await commitInChunks(docs, (batch, docData: any) => {
-      const { _id, ...data } = docData;
-      if (!_id) return;
-      batch.set(doc(db, collectionName, _id), data);
-    });
-    totalDocs += docs.length;
-  }
-
-  return totalDocs;
+export async function dryRunAppDataImport(backup: BackupFile) {
+  return apiRequest<{
+    valid: boolean;
+    totalDocuments: number;
+    collectionCount: number;
+    errors: string[];
+    warnings: string[];
+    manifest: Record<string, any>;
+  }>('/admin/import/dry-run', {
+    method: 'POST',
+    body: JSON.stringify(backup),
+  });
 }
 
 export async function deleteAllAppData(onProgress?: ProgressFn) {
-  let totalDocs = 0;
-  const currentUserId = auth.currentUser?.uid || '';
-
-  for (const collectionName of getResetCollections()) {
-    onProgress?.(`Deleting ${collectionName}...`);
-    try {
-      const snap = await getDocs(collection(db, collectionName));
-      const docs = collectionName === 'users' && currentUserId
-        ? snap.docs.filter(document => document.id !== currentUserId)
-        : snap.docs;
-      if (!docs.length) continue;
-
-      await commitInChunks(docs, (batch, document) => batch.delete(document.ref));
-      totalDocs += docs.length;
-    } catch (error: any) {
-      throw new Error(`Failed while deleting ${collectionName}: ${error?.message || 'Unknown error'}`);
-    }
-  }
-
-  return totalDocs;
+  onProgress?.('Resetting MySQL application data...');
+  const response = await apiRequest<{ deletedDocuments: number }>('/admin/reset', {
+    method: 'POST',
+    body: JSON.stringify({ confirm: 'RESET_GMH_DATA' }),
+    idempotencyKey: createIdempotencyKey('backup-reset'),
+  });
+  return response.deletedDocuments;
 }
 
 export function summarizeBackup(backup: Pick<BackupFile, 'collections'>) {

@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // MySQL is authoritative after the coordinated 3.2.0 cutover.
+    // Firebase Admin/service-account REST writes bypass these client rules.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

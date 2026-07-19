@@ -6,7 +6,9 @@ export default defineConfig({
   base: './',   // Required for Electron — loads assets relatively
   plugins: [react()],
   resolve: {
-    alias: { '@': path.resolve(__dirname, './src') },
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
   },
   optimizeDeps: {
     include: [
@@ -14,7 +16,6 @@ export default defineConfig({
       'recharts',
       'firebase/app',
       'firebase/auth',
-      'firebase/firestore',
     ],
   },
   build: {
@@ -24,7 +25,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          'firebase': ['firebase/app', 'firebase/auth', 'firebase/firestore'],
+          'firebase': ['firebase/app', 'firebase/auth', 'firebase/storage'],
           'react-vendor': ['react', 'react-dom', 'react-router-dom'],
           'charts': ['recharts'],
         },

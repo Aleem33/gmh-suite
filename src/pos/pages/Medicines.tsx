@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from '../../lib/firestoreCompat';
 import { downloadOrShare } from '../lib/nativeUtils';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';

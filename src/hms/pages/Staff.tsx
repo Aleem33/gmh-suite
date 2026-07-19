@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, setDoc } from '../../lib/firestoreCompat';
 import { db, registerUser, usernameToEmail } from '../../firebase';
 import { formatDate, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';

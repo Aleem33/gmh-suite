@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, doc, increment, runTransaction } from 'firebase/firestore';
-import { db } from '../../firebase';
+import { collection, onSnapshot, addDoc, updateDoc, doc, increment, runTransaction } from '../../lib/firestoreCompat';
+import { auth, db } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { Plus, Search, X, AlertTriangle, Edit2, FileText, CheckCircle, Clock } from 'lucide-react';
 import { useAppDialog } from '../../components/AppDialog';
@@ -95,6 +95,10 @@ export function Pharmacy() {
   }, []);
 
   const loadOrder = (order: any) => {
+    if (order.fulfillmentMode === 'billing') {
+      void alert('This IPD order must be completed as a Hospital sale in Pharmacy Billing.', 'Billing Required');
+      return;
+    }
     const items = (order.prescriptions || []).map((p: any) => {
       const qty     = calcQty(p.frequency, p.duration);
       const pName = (p.name || '').toLowerCase().trim();
@@ -122,6 +126,10 @@ export function Pharmacy() {
 
   const handleDispense = async () => {
     if (!selectedOrder) return;
+    if (selectedOrder.fulfillmentMode === 'billing') {
+      await alert('This IPD order must be completed in Pharmacy Billing.', 'Billing Required');
+      return;
+    }
     const toDispense = dispenseItems.filter(i => i.matchedId && i.qty > 0);
     if (!toDispense.length) { await alert('No medicines linked to stock. Please link each item.', 'Nothing to Dispense'); return; }
     const lowStockItem = toDispense.find(item => {
@@ -224,23 +232,45 @@ export function Pharmacy() {
       if (totalUnitsAdded <= 0) { setError('Enter at least one box.'); return; }
       if (!Number.isFinite(costPrice) || costPrice <= 0) { setError('Enter a valid cost per box.'); return; }
 
-      await addDoc(collection(db, 'purchases'), {
-        ...purchaseForm,
-        boxes: boxesPurchased,
-        boxesPurchased,
-        looseUnits: looseUnitsPurchased,
-        looseUnitsPurchased,
-        unitsAdded: totalUnitsAdded,
-        totalUnitsAdded,
-        unitsPerBox,
-        costPerBox: costPrice,
-        costPrice,
-        costPricePerUnit,
-        totalCost,
-        date: purchaseForm.date || nowISO(),
-        createdAt: nowISO(),
+      const medicineRef = doc(db, 'medicines', purchaseForm.medicineId);
+      const purchaseRef = doc(collection(db, 'purchases'));
+      const stockAppliedAt = nowISO();
+      const appliedBy = auth.currentUser?.uid || 'unknown';
+      await runTransaction(db, async tx => {
+        const medicineSnap = await tx.get(medicineRef);
+        if (!medicineSnap.exists()) throw new Error('The selected medicine no longer exists.');
+        const currentMedicine = medicineSnap.data();
+        const stockBefore = Number(currentMedicine.stock || 0);
+        const stockAfter = stockBefore + totalUnitsAdded;
+
+        tx.set(purchaseRef, {
+          ...purchaseForm,
+          boxes: boxesPurchased,
+          boxesPurchased,
+          looseUnits: looseUnitsPurchased,
+          looseUnitsPurchased,
+          unitsAdded: totalUnitsAdded,
+          totalUnitsAdded,
+          unitsPerBox,
+          costPerBox: costPrice,
+          costPrice,
+          costPricePerUnit,
+          totalCost,
+          date: purchaseForm.date || stockAppliedAt,
+          createdAt: stockAppliedAt,
+          stockBefore,
+          stockAfter,
+          stockAppliedAt,
+          appliedBy,
+          source: 'hms_pharmacy',
+        });
+        tx.update(medicineRef, {
+          stock: stockAfter,
+          batchNo: purchaseForm.batchNo || currentMedicine.batchNo || '',
+          expiryDate: purchaseForm.expiryDate || currentMedicine.expiryDate || '',
+          updatedAt: stockAppliedAt,
+        });
       });
-      await updateDoc(doc(db, 'medicines', purchaseForm.medicineId), { stock: increment(totalUnitsAdded), batchNo: purchaseForm.batchNo || med.batchNo, expiryDate: purchaseForm.expiryDate || med.expiryDate, updatedAt: nowISO() });
       setShowPurchaseModal(false);
       setPurchaseForm({ medicineId: '', medicineName: '', supplierId: '', supplierName: '', boxes: '', costPerBox: '', batchNo: '', expiryDate: today(), invoiceNo: '', date: today() });
     } catch (e: any) { setError(e.message); }
@@ -408,6 +438,10 @@ export function Pharmacy() {
                     <span className="flex items-center gap-1 text-xs text-green-700 bg-green-50 px-3 py-1 rounded-full font-medium">
                       <CheckCircle className="w-3.5 h-3.5" /> Dispensed
                     </span>
+                  ) : order.fulfillmentMode === 'billing' ? (
+                    <span className="flex items-center gap-1 text-xs text-blue-700 bg-blue-50 px-3 py-1 rounded-full font-medium">
+                      Billing Required
+                    </span>
                   ) : (
                     <>
                       <span className="flex items-center gap-1 text-xs text-orange-700 bg-orange-50 px-3 py-1 rounded-full font-medium">
@@ -423,7 +457,7 @@ export function Pharmacy() {
               </div>
               <div className="px-5 py-3">
                 <div className="flex flex-wrap gap-2">
-                  {(order.prescriptions || []).map((p: any, i: number) => (
+                  {(order.items || order.prescriptions || []).map((p: any, i: number) => (
                     <div key={i} className="flex items-center gap-1.5 bg-gray-50 border border-gray-100 rounded-lg px-3 py-1.5 text-xs">
                       <div>
                         <span className="font-semibold text-gray-800">{p.name}</span>
@@ -436,7 +470,7 @@ export function Pharmacy() {
                       <span className="text-gray-400">·</span>
                       <span className="text-gray-600">{p.duration}</span>
                       <span className="text-gray-400">→</span>
-                      <span className="font-bold text-blue-700">{calcQty(p.frequency, p.duration)} units</span>
+                      <span className="font-bold text-blue-700">{order.fulfillmentMode === 'billing' ? `${Number(p.quantity || 1)} ${p.sellType || 'unit'}` : `${calcQty(p.frequency, p.duration)} units`}</span>
                     </div>
                   ))}
                 </div>

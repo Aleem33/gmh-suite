@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { collection, onSnapshot, query, orderBy, addDoc, doc, updateDoc, increment } from 'firebase/firestore';
+import { addDoc, collection, onSnapshot, orderBy, query, where } from '../../lib/firestoreCompat';
 import { printOrShare } from '../lib/nativeUtils';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
-import { Search, RotateCcw, X, CheckCircle, AlertTriangle, Printer } from 'lucide-react';
+import { Search, RotateCcw, X, CheckCircle, AlertTriangle, Printer, Send } from 'lucide-react';
 import { format } from 'date-fns';
+import { hasPermission, type UserProfile } from '../../lib/permissions';
+import { processSaleReturn } from '../lib/returnProcessing';
 
 // ── Printable slip rendered in a hidden div, then printed via iframe ─────────
 function SaleReturnSlip({ data }: { data: any }) {
@@ -71,9 +73,10 @@ function printSlip(slipHtml: string) {
 
 interface SalesReturnsProps {
   readOnly?: boolean;
+  userProfile?: UserProfile | null;
 }
 
-export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
+export function SalesReturns({ readOnly = false, userProfile }: SalesReturnsProps) {
   const [sales, setSales] = useState<any[]>([]);
   const [returns, setReturns] = useState<any[]>([]);
   const [search, setSearch] = useState('');
@@ -83,6 +86,9 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
   const [successMsg, setSuccessMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const slipRef = useRef<HTMLDivElement>(null);
+  const [approvalRequests, setApprovalRequests] = useState<any[]>([]);
+  const canRequestApproval = userProfile?.username === 'haseeb' || hasPermission(userProfile, 'pos.saleReturns.request');
+  const canStartReturn = !readOnly || canRequestApproval;
 
   useEffect(() => {
     const q = query(collection(db, 'sales'), orderBy('date', 'desc'));
@@ -96,8 +102,18 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
       setReturns(list);
     }, (e) => handleFirestoreError(e, OperationType.GET, 'saleReturns'));
 
-    return () => { unsubSales(); unsubReturns(); };
-  }, []);
+    let unsubApprovals = () => {};
+    const uid = auth.currentUser?.uid;
+    if (canRequestApproval && uid) {
+      unsubApprovals = onSnapshot(
+        query(collection(db, 'approvalRequests'), where('requestedBy', '==', uid)),
+        snap => setApprovalRequests(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+        e => handleFirestoreError(e, OperationType.GET, 'approvalRequests'),
+      );
+    }
+
+    return () => { unsubSales(); unsubReturns(); unsubApprovals(); };
+  }, [canRequestApproval]);
 
   const filteredSales = sales.filter(s =>
     s.id.toLowerCase().includes(search.toLowerCase()) ||
@@ -113,15 +129,21 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
   };
 
   const openReturn = (sale: any) => {
-    if (readOnly) return;
+    if (!canStartReturn) return;
     setSelectedSale(sale);
     setReturnItems(
-      sale.items.map((item: any) => ({
-        ...item,
-        returnQty: 0,
-        alreadyReturned: getReturnedQty(sale.id, item.cartItemId),
-        maxReturn: item.quantity - getReturnedQty(sale.id, item.cartItemId),
-      }))
+      sale.items.map((item: any) => {
+        const alreadyReturned = Math.max(
+          getReturnedQty(sale.id, item.cartItemId),
+          Number(sale.returnedQuantities?.[item.cartItemId] || 0),
+        );
+        return {
+          ...item,
+          returnQty: 0,
+          alreadyReturned,
+          maxReturn: Math.max(0, item.quantity - alreadyReturned),
+        };
+      })
     );
     setReturnReason('');
   };
@@ -203,7 +225,6 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
   };
 
   const handleSubmit = async () => {
-    if (readOnly) return;
     if (!hasAnyReturn || !selectedSale || submitting) return;
     setSubmitting(true);
     try {
@@ -217,48 +238,39 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
         unitsPerBox: i.unitsPerBox || 1,
         refundAmount: (i.total / i.quantity) * orderDiscountRatio * i.returnQty,
       }));
-      const currentPending = Number(selectedSale.pendingAmount || 0);
-      const currentPaid = selectedSale.amountPaid == null ? Number(selectedSale.total || 0) : Number(selectedSale.amountPaid || 0);
-      const pendingReduction = Math.min(currentPending, returnTotal);
-      const refundableAmount = Math.max(0, returnTotal - pendingReduction);
-      const nextPending = Math.max(0, currentPending - pendingReduction);
-      const nextPaid = Math.max(0, currentPaid - refundableAmount);
-
-      const returnDoc = {
+      if (readOnly && canRequestApproval) {
+        await addDoc(collection(db, 'approvalRequests'), {
+          type: 'saleReturn',
+          status: 'pending',
+          title: `Sale return: ${selectedSale.customerName || selectedSale.id.slice(0, 10)}`,
+          originalSaleId: selectedSale.id,
+          originalDate: selectedSale.date || '',
+          customerId: selectedSale.customerId || '',
+          customerName: selectedSale.customerName || '',
+          items: itemsToReturn.map(item => ({
+            cartItemId: item.cartItemId,
+            medicineId: item.medicineId,
+            name: item.name,
+            sellType: item.sellType,
+            returnQty: item.returnQty,
+            estimatedRefundAmount: item.refundAmount,
+          })),
+          estimatedRefundAmount: returnTotal,
+          reason: returnReason,
+          requestedBy: auth.currentUser?.uid || 'unknown',
+          requestedByName: userProfile?.name || userProfile?.username || 'Haseeb',
+          createdAt: new Date().toISOString(),
+        });
+        setSelectedSale(null);
+        setSuccessMsg(`Sale return sent for admin approval - ${formatCurrency(returnTotal)}`);
+        setTimeout(() => setSuccessMsg(''), 5000);
+        return;
+      }
+      const dataWithId = await processSaleReturn({
         originalSaleId: selectedSale.id,
-        originalDate: selectedSale.date,
-        customerId: selectedSale.customerId || '',
-        customerName: selectedSale.customerName || '',
-        items: itemsToReturn,
-        totalRefund: returnTotal,
-        pendingReduction,
-        refundableAmount,
+        items: itemsToReturn.map(item => ({ cartItemId: item.cartItemId, returnQty: item.returnQty })),
         reason: returnReason,
-        date: new Date().toISOString(),
-        processedBy: auth.currentUser?.uid,
-      };
-
-      const docRef = await addDoc(collection(db, 'saleReturns'), returnDoc);
-
-      for (const item of itemsToReturn) {
-        const unitsToRestore = item.returnQty * (item.sellType === 'box' ? item.unitsPerBox : 1);
-        await updateDoc(doc(db, 'medicines', item.medicineId), {
-          stock: increment(unitsToRestore),
-        });
-      }
-      await updateDoc(doc(db, 'sales', selectedSale.id), {
-        pendingAmount: nextPending,
-        amountPaid: nextPaid,
-        returnedAmount: increment(returnTotal),
-        lastReturnedAt: new Date().toISOString(),
       });
-      if (selectedSale.customerId && pendingReduction > 0) {
-        await updateDoc(doc(db, 'customers', selectedSale.customerId), {
-          creditBalance: increment(-pendingReduction),
-        });
-      }
-
-      const dataWithId = { ...returnDoc, id: docRef.id };
       setSelectedSale(null);
       setSuccessMsg(`Return processed — Rs. ${returnTotal.toFixed(2)} refund`);
       setTimeout(() => setSuccessMsg(''), 5000);
@@ -300,6 +312,7 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
           <div className="flex-1 overflow-auto divide-y divide-gray-100">
             {filteredSales.map(sale => {
               const returned = returns.filter(r => r.originalSaleId === sale.id);
+              const pendingRequest = approvalRequests.find(r => r.type === 'saleReturn' && r.status === 'pending' && r.originalSaleId === sale.id);
               return (
                 <div key={sale.id} className="p-4 hover:bg-gray-50 flex justify-between items-center gap-3">
                   <div className="min-w-0">
@@ -313,9 +326,15 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
                         {returned.length} return(s) processed
                       </span>
                     )}
+                    {pendingRequest && (
+                      <span className="inline-block mt-1 ml-1 text-[10px] bg-yellow-100 text-yellow-700 font-semibold px-1.5 py-0.5 rounded">
+                        Approval pending
+                      </span>
+                    )}
                   </div>
-                  {!readOnly && <button
+                  {canStartReturn && <button
                     onClick={() => openReturn(sale)}
+                    disabled={!!pendingRequest}
                     className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 border border-blue-100"
                   >
                     <RotateCcw className="w-3.5 h-3.5" /> Return
@@ -367,7 +386,7 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
       </div>
 
       {/* Process Return Modal */}
-      {!readOnly && selectedSale && (
+      {canStartReturn && selectedSale && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-lg my-8">
             <div className="p-6 border-b border-gray-100 flex justify-between items-center">
@@ -383,7 +402,11 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
             </div>
 
             <div className="p-6 space-y-4">
-              <p className="text-sm text-gray-600">Select items and quantities to return. Stock will be restored automatically.</p>
+              {readOnly && canRequestApproval ? (
+                <p className="text-sm text-yellow-800 bg-yellow-50 border border-yellow-200 rounded-lg p-3">Select items and send the return for approval. Stock and balances change only after an admin approves it.</p>
+              ) : (
+                <p className="text-sm text-gray-600">Select items and quantities to return. Stock will be restored automatically.</p>
+              )}
 
               <div className="space-y-3 max-h-64 overflow-auto">
                 {returnItems.map(item => (
@@ -451,8 +474,8 @@ export function SalesReturns({ readOnly = false }: SalesReturnsProps) {
                   disabled={!hasAnyReturn || submitting}
                   className="px-4 py-2 bg-red-600 text-white rounded-md font-medium text-sm hover:bg-red-700 disabled:opacity-50 flex items-center gap-2"
                 >
-                  <Printer className="w-4 h-4" />
-                  {submitting ? 'Processing...' : 'Confirm Return & Print Slip'}
+                  {readOnly && canRequestApproval ? <Send className="w-4 h-4" /> : <Printer className="w-4 h-4" />}
+                  {submitting ? 'Processing...' : readOnly && canRequestApproval ? 'Send for Approval' : 'Confirm Return & Print Slip'}
                 </button>
               </div>
             </div>

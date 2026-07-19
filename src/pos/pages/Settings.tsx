@@ -1,9 +1,22 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { doc, getDoc, setDoc } from '../../lib/firestoreCompat';
 import { downloadOrShare } from '../lib/nativeUtils';
-import { AlertTriangle, Trash2, X, Download, Upload, CheckCircle, Database } from 'lucide-react';
+import { AlertTriangle, Trash2, X, Download, Upload, CheckCircle, Database, Building2, Save } from 'lucide-react';
 import { deleteAllAppData, exportAllAppData, GLOBAL_DATA_COLLECTIONS, restoreAllAppData, summarizeBackup } from '../../lib/dataSync';
+import { db } from '../../firebase';
+
+const DEFAULT_HOSPITAL_PROFILE = {
+  name: 'GMH Suite',
+  address: '',
+  phone: '',
+  email: '',
+  footerNote: 'Thank you for choosing our hospital.',
+};
 
 export function Settings() {
+  const [hospitalProfile, setHospitalProfile] = useState(DEFAULT_HOSPITAL_PROFILE);
+  const [savingHospitalProfile, setSavingHospitalProfile] = useState(false);
+  const [hospitalProfileMessage, setHospitalProfileMessage] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState('');
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -20,6 +33,45 @@ export function Settings() {
   const [importError, setImportError] = useState('');
   const [showImportConfirm, setShowImportConfirm] = useState(false);
   const [pendingImportData, setPendingImportData] = useState<any>(null);
+
+  useEffect(() => {
+    getDoc(doc(db, 'settings', 'hospital')).then(snap => {
+      if (snap.exists()) {
+        const data = snap.data();
+        setHospitalProfile({
+          name: String(data.name || ''),
+          address: String(data.address || ''),
+          phone: String(data.phone || ''),
+          email: String(data.email || ''),
+          footerNote: String(data.footerNote || ''),
+        });
+      }
+    }).catch(error => {
+      setHospitalProfileMessage(`Error loading hospital information: ${error?.message || 'Unknown error'}`);
+    });
+  }, []);
+
+  const saveHospitalProfile = async () => {
+    setSavingHospitalProfile(true);
+    setHospitalProfileMessage('');
+    try {
+      const profile = {
+        name: hospitalProfile.name.trim(),
+        address: hospitalProfile.address.trim(),
+        phone: hospitalProfile.phone.trim(),
+        email: hospitalProfile.email.trim(),
+        footerNote: hospitalProfile.footerNote.trim(),
+      };
+      await setDoc(doc(db, 'settings', 'hospital'), profile, { merge: true });
+      setHospitalProfile(profile);
+      setHospitalProfileMessage('Hospital print information saved successfully.');
+      setTimeout(() => setHospitalProfileMessage(''), 3500);
+    } catch (error: any) {
+      setHospitalProfileMessage(`Error: ${error?.message || 'Could not save hospital information.'}`);
+    } finally {
+      setSavingHospitalProfile(false);
+    }
+  };
 
   // ── Export ──────────────────────────────────────────────
   const handleExport = async () => {
@@ -105,6 +157,80 @@ export function Settings() {
   return (
     <div className="space-y-6 max-w-4xl">
       <h1 className="text-2xl font-bold text-gray-900">Settings</h1>
+
+      <section className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="p-5 md:p-6 border-b border-gray-100 bg-indigo-50 flex items-center gap-3">
+          <Building2 className="w-6 h-6 text-indigo-600" />
+          <div>
+            <h2 className="text-lg font-bold text-indigo-900">Hospital Print Information</h2>
+            <p className="text-sm text-indigo-700 mt-0.5">Used on Pharmacy bills and shared with HMS documents</p>
+          </div>
+        </div>
+        <div className="p-5 md:p-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Hospital Name</span>
+              <input
+                type="text"
+                value={hospitalProfile.name}
+                onChange={event => setHospitalProfile(profile => ({ ...profile, name: event.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Phone</span>
+              <input
+                type="text"
+                value={hospitalProfile.phone}
+                onChange={event => setHospitalProfile(profile => ({ ...profile, phone: event.target.value }))}
+                placeholder="+92 XXX XXXXXXX"
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Address</span>
+              <input
+                type="text"
+                value={hospitalProfile.address}
+                onChange={event => setHospitalProfile(profile => ({ ...profile, address: event.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Email</span>
+              <input
+                type="email"
+                value={hospitalProfile.email}
+                onChange={event => setHospitalProfile(profile => ({ ...profile, email: event.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="block text-xs font-medium text-gray-600 mb-1">Receipt Footer Note</span>
+              <textarea
+                rows={2}
+                value={hospitalProfile.footerNote}
+                onChange={event => setHospitalProfile(profile => ({ ...profile, footerNote: event.target.value }))}
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-y"
+              />
+            </label>
+          </div>
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <p className={`text-sm ${hospitalProfileMessage.startsWith('Error') ? 'text-red-600' : 'text-green-600'}`}>
+              {hospitalProfileMessage}
+            </p>
+            <button
+              type="button"
+              onClick={saveHospitalProfile}
+              disabled={savingHospitalProfile}
+              className="self-end inline-flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50"
+            >
+              <Save className="w-4 h-4" />
+              {savingHospitalProfile ? 'Saving...' : 'Save Print Information'}
+            </button>
+          </div>
+        </div>
+      </section>
 
       {/* ── Export Section ── */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">

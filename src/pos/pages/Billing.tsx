@@ -1,7 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { collection, onSnapshot, addDoc, doc, getDoc, updateDoc, increment, runTransaction } from 'firebase/firestore';
-import { printOrShare, printPageOrShare } from '../lib/nativeUtils';
+import { collection, onSnapshot, addDoc, doc, getDoc, increment, runTransaction } from '../../lib/firestoreCompat';
+import { printPharmacyDocument } from '../lib/pharmacyPrint';
+import {
+  EMPTY_HOSPITAL_PRINT_PROFILE,
+  type HospitalPrintProfile,
+} from '../lib/printTemplates';
 import { db, auth, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
@@ -9,7 +13,6 @@ import {
   User, UserCheck, UserX, ChevronDown, Percent, DollarSign,
   UserPlus, Check, X, Pill, ClipboardList, CheckCircle,
 } from 'lucide-react';
-import { format } from 'date-fns';
 import { DEFAULT_NON_ADMIN_DISCOUNT_PERCENT, hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
 
 interface BillingProps {
@@ -25,12 +28,16 @@ export function Billing({ userProfile }: BillingProps) {
   const [orderDiscount, setOrderDiscount] = useState(0);
   const [customerType, setCustomerType] = useState<'customer' | 'hospital'>('customer');
   const [lastReceipt, setLastReceipt]   = useState<any>(null);
+  const [hospitalPrintProfile, setHospitalPrintProfile] = useState<HospitalPrintProfile>(EMPTY_HOSPITAL_PRINT_PROFILE);
   const [showPrintAlert, setShowPrintAlert] = useState(false);
   const [stockError, setStockError]     = useState('');
   const [pharmacyOrders, setPharmacyOrders] = useState<any[]>([]);
+  const [activePharmacyOrder, setActivePharmacyOrder] = useState<any | null>(null);
   const [showRxModal, setShowRxModal] = useState(false);
   const [rxSearch, setRxSearch] = useState('');
   const [maxNonAdminDiscountPercent, setMaxNonAdminDiscountPercent] = useState(DEFAULT_NON_ADMIN_DISCOUNT_PERCENT);
+  const todayInput = new Date().toISOString().slice(0, 10);
+  const [adminSaleDate, setAdminSaleDate] = useState(todayInput);
 
   // Mobile: which tab is active
   const [mobileTab, setMobileTab] = useState<'medicines' | 'cart'>('medicines');
@@ -65,7 +72,12 @@ export function Billing({ userProfile }: BillingProps) {
           .sort((a: any, b: any) => (b.createdAt > a.createdAt ? 1 : -1))
       );
     }, err => handleFirestoreError(err, OperationType.GET, 'pharmacyOrders'));
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = onSnapshot(doc(db, 'settings', 'hospital'), snap => {
+      setHospitalPrintProfile(snap.exists()
+        ? { ...EMPTY_HOSPITAL_PRINT_PROFILE, ...(snap.data() as HospitalPrintProfile) }
+        : EMPTY_HOSPITAL_PRINT_PROFILE);
+    }, err => handleFirestoreError(err, OperationType.GET, 'settings/hospital'));
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); };
   }, []);
 
   useEffect(() => {
@@ -119,9 +131,16 @@ export function Billing({ userProfile }: BillingProps) {
   ).slice(0, 8);
 
   const isAdmin = isAdminProfile(userProfile);
-  const canCreateCustomers = isAdmin || hasPermission(userProfile, 'pos.customers.create');
-  const allowedDiscountPercent = isAdmin ? 100 : hasPermission(userProfile, 'pos.billing.discount') ? maxNonAdminDiscountPercent : 0;
-  const discountCapApplies = !isAdmin;
+  const isHaseeb = userProfile?.username === 'haseeb';
+  const hasBillingDiscount = hasPermission(userProfile, 'pos.billing.discount');
+  const canCreateCustomers = isAdmin || isHaseeb || hasPermission(userProfile, 'pos.customers.create');
+  const getAllowedDiscountPercentFor = (type: 'customer' | 'hospital') => {
+    if (isAdmin) return 100;
+    if (isHaseeb && type === 'hospital') return 100;
+    return hasBillingDiscount ? maxNonAdminDiscountPercent : 0;
+  };
+  const allowedDiscountPercent = getAllowedDiscountPercentFor(customerType);
+  const discountCapApplies = allowedDiscountPercent < 100;
   const discountCapLabel = `${allowedDiscountPercent}%`;
 
   const discountPercentFor = (type: 'rs' | 'pct', value: number, qty: number, price: number) => {
@@ -132,7 +151,7 @@ export function Billing({ userProfile }: BillingProps) {
 
   const rejectOverDiscountCap = (pct: number) => {
     if (!discountCapApplies || pct <= allowedDiscountPercent) return false;
-    setStockError(`Discount limit is ${discountCapLabel} for non-admin billing users.`);
+    setStockError(`Discount limit is ${discountCapLabel} for this sale type.`);
     setTimeout(() => setStockError(''), 4000);
     return true;
   };
@@ -155,6 +174,11 @@ export function Billing({ userProfile }: BillingProps) {
   };
 
   const addToCart = (med: any, sellType: 'box' | 'unit') => {
+    if (activePharmacyOrder) {
+      setStockError('Finish or clear the loaded pharmacy order before adding manual items.');
+      setTimeout(() => setStockError(''), 4000);
+      return;
+    }
     setCart(prev => {
       const cartItemId = `${med.id}-${sellType}`;
       const existing   = prev.find(item => item.cartItemId === cartItemId);
@@ -195,9 +219,44 @@ export function Billing({ userProfile }: BillingProps) {
     return Math.min(maxDiscount, Math.max(0, value));
   }
 
+  const clampDiscountsForSaleType = (nextType: 'customer' | 'hospital') => {
+    const nextLimit = getAllowedDiscountPercentFor(nextType);
+    if (nextLimit >= 100) return;
+
+    setOrderDiscount(prev => Math.min(prev, nextLimit));
+    setCart(prev => prev.map(item => {
+      const pct = discountPercentFor(item.discountType, item.discountValue, item.quantity, item.price);
+      if (pct <= nextLimit) return item;
+
+      const lineTotal = item.quantity * item.price;
+      const discountValue = item.discountType === 'pct'
+        ? nextLimit
+        : (lineTotal * nextLimit) / 100;
+      const itemDiscount = computeItemDiscountRs(item.discountType, discountValue, item.quantity, item.price);
+
+      return {
+        ...item,
+        discountValue,
+        itemDiscount,
+        total: Math.max(0, lineTotal - itemDiscount),
+      };
+    }));
+  };
+
+  const handleCustomerTypeChange = (nextType: 'customer' | 'hospital') => {
+    if (activePharmacyOrder && nextType !== 'hospital') {
+      setStockError('A loaded pharmacy order must be completed as a Hospital sale.');
+      setTimeout(() => setStockError(''), 4000);
+      return;
+    }
+    setCustomerType(nextType);
+    clampDiscountsForSaleType(nextType);
+  };
+
   const updateQuantity = (cartItemId: string, delta: number) => {
     setCart(prev => prev.map(item => {
       if (item.cartItemId !== cartItemId) return item;
+      if (item.linkedOrderItem) return item;
       const med = medicines.find(m => m.id === item.medicineId);
       if (!med) return item;
       const newQ = Math.max(1, item.quantity + delta);
@@ -220,7 +279,7 @@ export function Billing({ userProfile }: BillingProps) {
   };
 
   const removeFromCart = (cartItemId: string) =>
-    setCart(prev => prev.filter(item => item.cartItemId !== cartItemId));
+    setCart(prev => prev.filter(item => item.cartItemId !== cartItemId || item.linkedOrderItem));
 
   const grossSubtotal        = cart.reduce((sum, item) => sum + item.quantity * item.price, 0);
   const totalItemDiscounts   = cart.reduce((sum, item) => sum + (item.itemDiscount || 0), 0);
@@ -230,48 +289,132 @@ export function Billing({ userProfile }: BillingProps) {
   const effectiveAmountPaid  = amountPaid === '' ? grandTotal : Math.min(Number(amountPaid), grandTotal);
   const pendingAmount        = Math.max(0, grandTotal - effectiveAmountPaid);
 
-  const handlePrint = () => {
+  const handlePrint = (receipt = lastReceipt) => {
+    if (!receipt) return;
     if (window !== window.top) {
       setShowPrintAlert(true); setTimeout(() => setShowPrintAlert(false), 5000);
-    } else { printPageOrShare('Receipt'); }
+    } else {
+      void printPharmacyDocument({
+        kind: 'bill',
+        record: receipt,
+        hospitalProfile: hospitalPrintProfile,
+        title: 'Pharmacy Bill',
+        filename: 'pharmacy-bill.pdf',
+      });
+    }
+  };
+
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'p') return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      if (lastReceipt) {
+        handlePrint(lastReceipt);
+      } else {
+        setStockError('Complete checkout first, then the pharmacy bill will print in the 110 x 190 mm format.');
+        setTimeout(() => setStockError(''), 4500);
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [lastReceipt, hospitalPrintProfile]);
+
+  const getOrderItems = (order: any) => Array.isArray(order.items) && order.items.length
+    ? order.items
+    : (order.prescriptions || []);
+
+  const findOrderMedicine = (item: any) => {
+    if (item.medicineId) {
+      const exactId = medicines.find(medicine => medicine.id === item.medicineId);
+      if (exactId) return exactId;
+    }
+    const itemName = String(item.name || '').toLowerCase().trim();
+    if (!itemName) return null;
+    return medicines.find(medicine => String(medicine.name || '').toLowerCase().trim() === itemName)
+      || medicines.find(medicine => {
+        const medicineName = String(medicine.name || '').toLowerCase().trim();
+        return medicineName.includes(itemName) || itemName.includes(medicineName);
+      })
+      || null;
   };
 
   const loadPrescription = (order: any) => {
+    if (activePharmacyOrder || cart.length > 0) {
+      setStockError('Checkout or clear the current cart before loading another pharmacy order.');
+      setTimeout(() => setStockError(''), 4500);
+      return;
+    }
     const newItems: any[] = [];
-    for (const rx of (order.prescriptions || [])) {
-      const med = medicines.find(
-        m => m.name.toLowerCase().trim() === rx.name.toLowerCase().trim() && m.stock > 0
-      );
-      if (!med) continue;
-      const cartItemId = `${med.id}-unit`;
-      if (newItems.find(i => i.cartItemId === cartItemId) || cart.find(i => i.cartItemId === cartItemId)) continue;
-      const price = med.unitPrice || med.price;
+    const unavailable: string[] = [];
+    for (const rx of getOrderItems(order)) {
+      const med = findOrderMedicine(rx);
+      const sellType: 'unit' | 'box' = rx.sellType === 'box' ? 'box' : 'unit';
+      const quantity = Math.max(1, Math.floor(Number(rx.quantity || 1)));
+      const unitsPerBox = Math.max(1, Number(med?.unitsPerBox) || Number(rx.unitsPerBox) || 1);
+      const unitsNeeded = quantity * (sellType === 'box' ? unitsPerBox : 1);
+      if (!med || Number(med.stock || 0) < unitsNeeded) {
+        unavailable.push(`${rx.name || 'Unknown item'} (${unitsNeeded} unit(s) needed)`);
+        continue;
+      }
+      const cartItemId = `${med.id}-${sellType}`;
+      const price = Number(sellType === 'box' ? (med.retailPrice || med.price) : (med.unitPrice || med.price)) || 0;
+      const existing = newItems.find(item => item.cartItemId === cartItemId);
+      if (existing) {
+        existing.quantity += quantity;
+        existing.requestedQuantity += quantity;
+        existing.total = existing.quantity * existing.price;
+        continue;
+      }
       newItems.push({
         cartItemId,
         medicineId: med.id,
         name: med.name,
         category: med.category || 'Medicine',
-        sellType: 'unit',
+        sellType,
         price,
         costPrice: med.costPrice || 0,
-        quantity: 1,
+        quantity,
+        requestedQuantity: quantity,
+        linkedOrderItem: true,
         discountType: 'rs' as 'rs' | 'pct',
         discountValue: 0,
         itemDiscount: 0,
-        total: price,
-        unitsPerBox: med.unitsPerBox || 1,
+        total: price * quantity,
+        unitsPerBox,
         rxNote: `${rx.dosage || ''} ${rx.frequency || ''} ${rx.duration || ''}`.trim(),
       });
     }
-    setCart(prev => [...prev, ...newItems]);
+    if (order.fulfillmentMode === 'billing' && unavailable.length > 0) {
+      setStockError(`Cannot load this IPD order: ${unavailable.join(', ')}.`);
+      setTimeout(() => setStockError(''), 6000);
+      return;
+    }
+    if (!newItems.length) {
+      setStockError('No requested items can currently be loaded from pharmacy stock.');
+      setTimeout(() => setStockError(''), 4500);
+      return;
+    }
+    setCart(newItems);
+    setActivePharmacyOrder(order);
     setCustomerType('hospital');
+    setSelectedCustomer(null);
+    setCustomerSearch('');
+    setOrderDiscount(0);
+    setAmountPaid('');
     setShowRxModal(false);
     setMobileTab('cart');
-    updateDoc(doc(db, 'pharmacyOrders', order.id), {
-      status: 'dispensed',
-      dispensedAt: new Date().toISOString(),
-      dispensedBy: auth.currentUser?.uid || '',
-    }).catch(error => handleFirestoreError(error, OperationType.UPDATE, `pharmacyOrders/${order.id}`));
+  };
+
+  const clearLoadedOrder = () => {
+    setCart([]);
+    setActivePharmacyOrder(null);
+    setOrderDiscount(0);
+    setAmountPaid('');
+    setSelectedCustomer(null);
+    setCustomerSearch('');
+    setMobileTab('medicines');
   };
 
   const handleCheckout = async () => {
@@ -279,12 +422,19 @@ export function Billing({ userProfile }: BillingProps) {
     if (rejectOverDiscountCap(orderDiscount)) return;
     if (cart.some(item => rejectOverDiscountCap(discountPercentFor(item.discountType, item.discountValue, item.quantity, item.price)))) return;
     try {
+      const checkoutAt = new Date().toISOString();
+      const saleDate = isAdmin
+        ? new Date(`${adminSaleDate || todayInput}T${new Date().toTimeString().slice(0, 8)}`).toISOString()
+        : checkoutAt;
+      const isBackdated = saleDate.slice(0, 10) !== checkoutAt.slice(0, 10);
       const saleData: any = {
-        items: cart, grossSubtotal, totalItemDiscounts,
+        items: cart.map(item => ({ ...item })), grossSubtotal, totalItemDiscounts,
         subtotal: subtotalAfterItemDisc, orderDiscount: orderDiscountAmount,
+        orderDiscountPercent: orderDiscount,
         discount: orderDiscountAmount + totalItemDiscounts, total: grandTotal,
         amountPaid: effectiveAmountPaid, pendingAmount,
-        date: new Date().toISOString(), customerType,
+        date: saleDate, createdAt: checkoutAt, enteredBy: auth.currentUser?.uid || '',
+        isBackdated, customerType,
         cashierId: auth.currentUser?.uid,
       };
       if (selectedCustomer) {
@@ -292,35 +442,108 @@ export function Billing({ userProfile }: BillingProps) {
         saleData.customerName  = selectedCustomer.name;
         saleData.customerPhone = selectedCustomer.phone || '';
       }
+      if (activePharmacyOrder) {
+        saleData.pharmacyOrderId = activePharmacyOrder.id;
+        saleData.linkedPharmacyOrderId = activePharmacyOrder.id;
+        saleData.source = activePharmacyOrder.source || 'pharmacy_order';
+        saleData.fulfillmentMode = 'billing';
+        saleData.admissionId = activePharmacyOrder.admissionId || '';
+        saleData.patientId = activePharmacyOrder.patientId || '';
+        saleData.patientName = activePharmacyOrder.patientName || '';
+        saleData.patientMRN = activePharmacyOrder.patientMRN || '';
+        saleData.wardId = activePharmacyOrder.wardId || '';
+        saleData.wardName = activePharmacyOrder.wardName || '';
+        saleData.bedId = activePharmacyOrder.bedId || '';
+        saleData.bedNo = activePharmacyOrder.bedNo || '';
+        saleData.customerName = activePharmacyOrder.patientName || saleData.customerName || 'Hospital Patient';
+        delete saleData.customerId;
+        delete saleData.customerPhone;
+      }
       const saleRef = doc(collection(db, 'sales'));
       await runTransaction(db, async (tx) => {
-        const stockUpdates: { medRef: ReturnType<typeof doc>; unitsToDeduct: number }[] = [];
+        let currentOrder: any = null;
+        let orderRef: ReturnType<typeof doc> | null = null;
+        let treatmentRef: ReturnType<typeof doc> | null = null;
+        if (activePharmacyOrder) {
+          orderRef = doc(db, 'pharmacyOrders', activePharmacyOrder.id);
+          const orderSnap = await tx.get(orderRef);
+          if (!orderSnap.exists() || orderSnap.data().status !== 'pending') {
+            throw new Error('This pharmacy order is no longer pending. Clear the cart and reload it.');
+          }
+          currentOrder = orderSnap.data();
+          if (currentOrder.bedTreatmentId) {
+            treatmentRef = doc(db, 'bedTreatments', currentOrder.bedTreatmentId);
+            const treatmentSnap = await tx.get(treatmentRef);
+            if (!treatmentSnap.exists() || treatmentSnap.data().fulfillmentStatus !== 'pending') {
+              throw new Error('The linked IPD care entry is no longer pending.');
+            }
+          }
+          if (currentOrder.fulfillmentMode === 'billing') {
+            for (const expected of getOrderItems(currentOrder)) {
+              const sellType = expected.sellType === 'box' ? 'box' : 'unit';
+              const expectedQuantity = Math.max(1, Math.floor(Number(expected.quantity || 1)));
+              const loaded = cart.find(item => item.medicineId === expected.medicineId && item.sellType === sellType);
+              if (!loaded || Number(loaded.quantity) !== expectedQuantity) {
+                throw new Error(`Loaded quantity for ${expected.name || 'an IPD item'} no longer matches the pharmacy order.`);
+              }
+            }
+          }
+        }
+        const requestedStock = new Map<string, { name: string; unitsToDeduct: number }>();
         for (const item of cart) {
-          const medRef = doc(db, 'medicines', item.medicineId);
+          const unitsToDeduct = item.quantity * (item.sellType === 'box' ? item.unitsPerBox : 1);
+          const existing = requestedStock.get(item.medicineId);
+          requestedStock.set(item.medicineId, {
+            name: item.name,
+            unitsToDeduct: (existing?.unitsToDeduct || 0) + unitsToDeduct,
+          });
+        }
+        const stockUpdates: { medRef: ReturnType<typeof doc>; unitsToDeduct: number }[] = [];
+        for (const [medicineId, requested] of requestedStock) {
+          const medRef = doc(db, 'medicines', medicineId);
           const medSnap = await tx.get(medRef);
-          if (!medSnap.exists()) throw new Error(`Medicine not found: ${item.name}`);
+          if (!medSnap.exists()) throw new Error(`Medicine not found: ${requested.name}`);
 
           const currentStock = Number(medSnap.data().stock || 0);
-          const unitsToDeduct = item.quantity * (item.sellType === 'box' ? item.unitsPerBox : 1);
-          if (currentStock < unitsToDeduct) {
-            throw new Error(`Not enough stock for ${item.name}. Available: ${currentStock}, needed: ${unitsToDeduct}.`);
+          if (currentStock < requested.unitsToDeduct) {
+            throw new Error(`Not enough stock for ${requested.name}. Available: ${currentStock}, needed: ${requested.unitsToDeduct}.`);
           }
-          stockUpdates.push({ medRef, unitsToDeduct });
+          stockUpdates.push({ medRef, unitsToDeduct: requested.unitsToDeduct });
         }
 
         stockUpdates.forEach(({ medRef, unitsToDeduct }) => {
           tx.update(medRef, { stock: increment(-unitsToDeduct) });
         });
         tx.set(saleRef, saleData);
-        if (selectedCustomer && pendingAmount > 0) {
+        if (selectedCustomer && !activePharmacyOrder && pendingAmount > 0) {
           tx.update(doc(db, 'customers', selectedCustomer.id), { creditBalance: increment(pendingAmount) });
         }
+        if (orderRef) {
+          const fulfilledAt = new Date().toISOString();
+          tx.update(orderRef, {
+            status: 'dispensed',
+            dispensedAt: fulfilledAt,
+            dispensedBy: auth.currentUser?.uid || '',
+            saleId: saleRef.id,
+          });
+          if (treatmentRef) {
+            tx.update(treatmentRef, {
+              fulfillmentStatus: 'fulfilled',
+              fulfilledAt,
+              fulfilledBy: auth.currentUser?.uid || '',
+              saleId: saleRef.id,
+            });
+          }
+        }
       });
-      setLastReceipt({ ...saleData, id: saleRef.id });
+      const receipt = { ...saleData, id: saleRef.id };
+      setLastReceipt(receipt);
       setCart([]); setOrderDiscount(0); setAmountPaid('');
+      setActivePharmacyOrder(null);
       setSelectedCustomer(null); setCustomerSearch('');
+      setAdminSaleDate(todayInput);
       setMobileTab('medicines');
-      setTimeout(handlePrint, 500);
+      setTimeout(() => handlePrint(receipt), 500);
     } catch (error: any) {
       setStockError(error?.message || handleFirestoreError(error, OperationType.CREATE, 'sales'));
       setTimeout(() => setStockError(''), 5000);
@@ -415,18 +638,33 @@ export function Billing({ userProfile }: BillingProps) {
 
         {/* Sale type toggle */}
         <div className="flex bg-white rounded-lg p-1 border border-gray-200">
-          <button onClick={() => setCustomerType('customer')}
-            className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${customerType === 'customer' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
+          <button onClick={() => handleCustomerTypeChange('customer')} disabled={Boolean(activePharmacyOrder)}
+            className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors disabled:opacity-40 ${customerType === 'customer' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
             Customer
           </button>
-          <button onClick={() => setCustomerType('hospital')}
+          <button onClick={() => handleCustomerTypeChange('hospital')}
             className={`flex-1 py-1.5 text-sm font-medium rounded-md transition-colors ${customerType === 'hospital' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:text-gray-700'}`}>
             Hospital
           </button>
         </div>
 
+        {isAdmin && (
+          <div className="bg-white border border-gray-200 rounded-lg px-3 py-2">
+            <label className="block text-xs font-medium text-gray-500 mb-1">Sale Date</label>
+            <input
+              type="date"
+              value={adminSaleDate}
+              onChange={e => setAdminSaleDate(e.target.value || todayInput)}
+              className="w-full border border-gray-200 rounded-md px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            {adminSaleDate !== todayInput && (
+              <p className="text-[11px] text-amber-600 mt-1">This sale will appear in reports for the selected date.</p>
+            )}
+          </div>
+        )}
+
         {/* Customer selection */}
-        <div ref={customerDropdownRef} className="relative">
+        <div ref={customerDropdownRef} className={`relative ${activePharmacyOrder ? 'pointer-events-none opacity-50' : ''}`}>
           <div className="flex items-center gap-1.5 mb-1">
             <User className="w-3.5 h-3.5 text-gray-400" />
             <span className="text-xs font-medium text-gray-500">
@@ -514,6 +752,17 @@ export function Billing({ userProfile }: BillingProps) {
         </div>
       </div>
 
+      {activePharmacyOrder && (
+        <div className="mx-3 mt-3 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2">
+          <ClipboardList className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-blue-900">Loaded pharmacy order</p>
+            <p className="text-xs text-blue-700 truncate">{activePharmacyOrder.patientName || 'Hospital patient'}{activePharmacyOrder.patientMRN ? ` | ${activePharmacyOrder.patientMRN}` : ''}</p>
+          </div>
+          <button onClick={clearLoadedOrder} className="text-xs font-semibold text-red-600 hover:text-red-700 shrink-0">Clear</button>
+        </div>
+      )}
+
       {/* Cart items */}
       <div className="flex-1 overflow-auto p-3 space-y-2">
         {cart.length === 0 ? (
@@ -539,21 +788,27 @@ export function Billing({ userProfile }: BillingProps) {
               </div>
               <div className="flex items-center gap-1 shrink-0">
                 <span className="font-bold text-sm text-gray-900 whitespace-nowrap">{formatCurrency(item.total)}</span>
-                <button onClick={() => removeFromCart(item.cartItemId)} className="p-1 text-red-400 hover:bg-red-50 rounded">
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {!item.linkedOrderItem && (
+                  <button onClick={() => removeFromCart(item.cartItemId)} className="p-1 text-red-400 hover:bg-red-50 rounded" title="Remove item">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
             {/* Qty */}
-            <div className="flex items-center border border-gray-200 rounded-md bg-gray-50 w-fit">
-              <button onClick={() => updateQuantity(item.cartItemId, -1)} className="px-2 py-1.5 hover:bg-gray-200 text-gray-600 rounded-l-md">
-                <Minus className="w-3 h-3" />
-              </button>
-              <span className="w-8 text-center text-sm font-semibold">{item.quantity}</span>
-              <button onClick={() => updateQuantity(item.cartItemId, 1)} className="px-2 py-1.5 hover:bg-gray-200 text-gray-600 rounded-r-md">
-                <Plus className="w-3 h-3" />
-              </button>
-            </div>
+            {item.linkedOrderItem ? (
+              <div className="w-fit rounded-md border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">Requested quantity: {item.quantity}</div>
+            ) : (
+              <div className="flex items-center border border-gray-200 rounded-md bg-gray-50 w-fit">
+                <button onClick={() => updateQuantity(item.cartItemId, -1)} className="px-2 py-1.5 hover:bg-gray-200 text-gray-600 rounded-l-md">
+                  <Minus className="w-3 h-3" />
+                </button>
+                <span className="w-8 text-center text-sm font-semibold">{item.quantity}</span>
+                <button onClick={() => updateQuantity(item.cartItemId, 1)} className="px-2 py-1.5 hover:bg-gray-200 text-gray-600 rounded-r-md">
+                  <Plus className="w-3 h-3" />
+                </button>
+              </div>
+            )}
             {/* Discount */}
             <div className="space-y-1.5">
               <div className="flex items-center gap-1.5">
@@ -706,9 +961,16 @@ export function Billing({ userProfile }: BillingProps) {
                     o.patientName?.toLowerCase().includes(rxSearch.toLowerCase()) ||
                     o.patientMRN?.includes(rxSearch))
                   .map(order => {
-                    const matchCount = (order.prescriptions || []).filter((rx: any) =>
-                      medicines.some(m => m.name.toLowerCase().trim() === rx.name.toLowerCase().trim() && m.stock > 0)
-                    ).length;
+                    const orderItems = getOrderItems(order);
+                    const availability = orderItems.map((item: any) => {
+                      const medicine = findOrderMedicine(item);
+                      const quantity = Math.max(1, Math.floor(Number(item.quantity || 1)));
+                      const unitsPerBox = Math.max(1, Number(medicine?.unitsPerBox) || Number(item.unitsPerBox) || 1);
+                      const unitsNeeded = quantity * (item.sellType === 'box' ? unitsPerBox : 1);
+                      return { item, medicine, unitsNeeded, inStock: Boolean(medicine) && Number(medicine.stock || 0) >= unitsNeeded };
+                    });
+                    const matchCount = availability.filter(item => item.inStock).length;
+                    const canLoad = order.fulfillmentMode === 'billing' ? matchCount === orderItems.length && orderItems.length > 0 : matchCount > 0;
                     return (
                       <div key={order.id} className="border border-gray-200 rounded-xl p-4 hover:border-blue-300 hover:shadow-sm transition-all">
                         <div className="flex items-start justify-between gap-3">
@@ -717,26 +979,27 @@ export function Billing({ userProfile }: BillingProps) {
                               <span className="font-semibold text-gray-900">{order.patientName}</span>
                               <span className="text-xs font-mono text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded">{order.patientMRN}</span>
                               {order.patientAge && <span className="text-xs text-gray-500">{order.patientAge}y - {order.patientGender}</span>}
+                              {order.fulfillmentMode === 'billing' && <span className="text-[10px] font-bold uppercase text-rose-700 bg-rose-50 px-2 py-0.5 rounded-full">IPD</span>}
                             </div>
-                            <p className="text-xs text-gray-500 mt-0.5">Dr. {order.doctorName} - {order.department}</p>
+                            {order.doctorName && <p className="text-xs text-gray-500 mt-0.5">Dr. {order.doctorName} - {order.department}</p>}
+                            {order.admissionId && <p className="text-xs text-gray-500 mt-0.5">{order.wardName || 'IPD'}{order.bedNo ? ` | Bed ${order.bedNo}` : ''}</p>}
                             {order.diagnosis && <p className="text-xs text-blue-600 mt-1 font-medium">Dx: {order.diagnosis}</p>}
                             <div className="mt-2 flex flex-wrap gap-1.5">
-                              {(order.prescriptions || []).map((rx: any, i: number) => {
-                                const inStock = medicines.some(m => m.name.toLowerCase().trim() === rx.name.toLowerCase().trim() && m.stock > 0);
+                              {availability.map(({ item, inStock }, i: number) => {
                                 return (
                                   <span key={i} className={`text-xs px-2 py-0.5 rounded-full font-medium ${inStock ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-400 line-through'}`}>
-                                    {rx.name}
+                                    {item.name}{item.quantity ? ` x ${item.quantity} ${item.sellType || 'unit'}` : ''}
                                   </span>
                                 );
                               })}
                             </div>
                             <p className="text-[11px] text-gray-400 mt-1.5">
-                              {matchCount} of {order.prescriptions?.length || 0} medicines in stock
+                              {matchCount} of {orderItems.length} medicines available in the requested quantity
                             </p>
                           </div>
                           <button
                             onClick={() => loadPrescription(order)}
-                            disabled={matchCount === 0}
+                            disabled={!canLoad || Boolean(activePharmacyOrder) || cart.length > 0}
                             className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
                           >
                             <CheckCircle className="w-4 h-4" />
@@ -751,66 +1014,6 @@ export function Billing({ userProfile }: BillingProps) {
           </div>
         </div>
       )}
-
-      {/* Printable Receipt */}
-      <div className="hidden print:block w-[80mm] mx-auto bg-white text-black text-sm font-mono p-4">
-        <div className="text-center mb-4">
-          <h2 className="text-xl font-bold">GMH Suite Pharmacy</h2>
-          <p>Receipt</p>
-          <p>{lastReceipt?.date ? format(new Date(lastReceipt.date), 'dd/MM/yyyy HH:mm') : format(new Date(), 'dd/MM/yyyy HH:mm')}</p>
-          {lastReceipt?.id && <p className="text-xs mt-1">ID: {lastReceipt.id.slice(0, 8)}</p>}
-          <p className="text-xs mt-1 uppercase font-bold border border-black inline-block px-2 py-0.5">
-            {lastReceipt?.customerType || customerType}
-          </p>
-          {lastReceipt?.customerName && <p className="text-xs mt-1">Customer: {lastReceipt.customerName}</p>}
-        </div>
-        <table className="w-full mb-4">
-          <thead>
-            <tr className="border-b border-black border-dashed">
-              <th className="text-left pb-1">Item</th>
-              <th className="text-center pb-1">Qty</th>
-              <th className="text-right pb-1">Total</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-dashed">
-            {(lastReceipt?.items || cart).map((item: any) => (
-              <tr key={item.cartItemId}>
-                <td className="py-1">
-                  <div className="line-clamp-1">{item.name}</div>
-                  <div className="text-xs text-gray-500">{item.sellType === 'box' ? '(Box)' : '(Unit)'} @ {formatCurrency(item.price)}</div>
-                  {item.itemDiscount > 0 && <div className="text-xs">Disc: -{formatCurrency(item.itemDiscount)}</div>}
-                </td>
-                <td className="text-center py-1">{item.quantity}</td>
-                <td className="text-right py-1">{formatCurrency(item.total)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <div className="border-t border-black border-dashed pt-2 space-y-1">
-          <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(lastReceipt?.grossSubtotal || grossSubtotal)}</span></div>
-          {(lastReceipt?.totalItemDiscounts || totalItemDiscounts) > 0 && (
-            <div className="flex justify-between"><span>Item Discounts:</span><span>-{formatCurrency(lastReceipt?.totalItemDiscounts || totalItemDiscounts)}</span></div>
-          )}
-          {(lastReceipt?.orderDiscount || orderDiscountAmount) > 0 && (
-            <div className="flex justify-between"><span>Order Discount ({orderDiscount}%):</span><span>-{formatCurrency(lastReceipt?.orderDiscount || orderDiscountAmount)}</span></div>
-          )}
-          <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t border-black">
-            <span>Total:</span><span>{formatCurrency(lastReceipt?.total || grandTotal)}</span>
-          </div>
-          {(lastReceipt?.pendingAmount || pendingAmount) > 0 && (
-            <>
-              <div className="flex justify-between"><span>Paid:</span><span>{formatCurrency(lastReceipt?.amountPaid || effectiveAmountPaid)}</span></div>
-              <div className="flex justify-between font-bold border-t border-dashed pt-1 mt-1">
-                <span>Pending:</span><span>{formatCurrency(lastReceipt?.pendingAmount || pendingAmount)}</span>
-              </div>
-            </>
-          )}
-        </div>
-        <div className="text-center mt-8 text-xs">
-          <p>Thank you for your visit!</p>
-          <p>Get Well Soon</p>
-        </div>
-      </div>
 
       {/* ── DESKTOP LAYOUT: side-by-side ── */}
       <div className="hidden md:flex h-full gap-6 print:hidden">

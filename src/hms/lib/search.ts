@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, onSnapshot } from '../../lib/firestoreCompat';
 import { db } from '../../firebase';
 
 export interface SearchResult {

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc } from '../../lib/firestoreCompat';
 import { db } from '../../firebase';
 import { formatDate, nowISO } from '../lib/utils';
 import { Plus, Search, Edit2, Trash2, X, Truck, Phone, Mail, MapPin } from 'lucide-react';

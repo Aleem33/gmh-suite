@@ -11,27 +11,21 @@ import {
   setPersistence, browserLocalPersistence,
   createUserWithEmailAndPassword,
 } from 'firebase/auth';
-import {
-  getFirestore, doc, getDoc, setDoc, updateDoc,
-  increment, enableIndexedDbPersistence,
-} from 'firebase/firestore';
+import { getFirestore } from './lib/firestoreCompat';
 import { getStorage } from 'firebase/storage';
 import firebaseConfig from '../firebase-applet-config.json';
+import { hostingerDocumentStore } from './lib/hostingerDocumentStore';
 
 // ── App instances ─────────────────────────────────────────────────────────────
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db   = getFirestore(app);
+export const db = getFirestore(app);
 export const storage = getStorage(app);
 
 // Keep user logged in across sessions
 setPersistence(auth, browserLocalPersistence).catch(console.error);
 
 // Enable offline support (data cached locally when internet drops)
-enableIndexedDbPersistence(db).catch(() => {
-  // Fails silently if multiple tabs open — that's fine
-});
-
 // Secondary app — creates new users without logging out the current admin
 const secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
 export const secondaryAuth = getAuth(secondaryApp);
@@ -59,27 +53,15 @@ export const registerSecondaryUser = createUser;
 
 // ── Auto-incrementing counters (MRN, Bill numbers) ────────────────────────────
 export async function getNextMRN(): Promise<string> {
-  const ref = doc(db, 'counters', 'mrn');
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, { value: 1 });
-    return 'MRN-00001';
-  }
-  await updateDoc(ref, { value: increment(1) });
-  const next = (snap.data().value as number) + 1;
-  return `MRN-${String(next).padStart(5, '0')}`;
+  return (await hostingerDocumentStore.nextCounter('mrn', 'MRN')).formatted;
 }
 
 export async function getNextBillNo(): Promise<string> {
-  const ref = doc(db, 'counters', 'bill');
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    await setDoc(ref, { value: 1 });
-    return 'BILL-00001';
-  }
-  await updateDoc(ref, { value: increment(1) });
-  const next = (snap.data().value as number) + 1;
-  return `BILL-${String(next).padStart(5, '0')}`;
+  return (await hostingerDocumentStore.nextCounter('bill', 'BILL')).formatted;
+}
+
+export async function getNextQuotationNo(): Promise<string> {
+  return (await hostingerDocumentStore.nextCounter('quotation', 'QUOTE')).formatted;
 }
 
 // ── Firestore error handler ───────────────────────────────────────────────────
@@ -102,7 +84,7 @@ export function handleFirestoreError(err: unknown, operation: OperationType = 'r
     case 'unavailable':       return 'Service temporarily unavailable. Please try again.';
     case 'unauthenticated':   return 'Session expired. Please log in again.';
     default:
-      console.error(`Firestore ${operation} error:`, err);
+      console.error(`Data service ${operation} error:`, err);
       return e.message || 'An unexpected error occurred.';
   }
 }

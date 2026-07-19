@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, onSnapshot, query, orderBy, doc, updateDoc } from 'firebase/firestore';
+import { collection, onSnapshot, query, orderBy, doc, updateDoc } from '../../lib/firestoreCompat';
 import { printPageOrShare, downloadOrShare } from '../lib/nativeUtils';
+import { printPharmacyDocument } from '../lib/pharmacyPrint';
+import {
+  EMPTY_HOSPITAL_PRINT_PROFILE,
+  type HospitalPrintProfile,
+} from '../lib/printTemplates';
 import { db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
 import {
@@ -57,9 +62,9 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
   const [saleReturns, setSaleReturns]   = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [selectedSale, setSelectedSale] = useState<any | null>(null);
+  const [hospitalPrintProfile, setHospitalPrintProfile] = useState<HospitalPrintProfile>(EMPTY_HOSPITAL_PRINT_PROFILE);
   const [editingSale, setEditingSale]       = useState<any | null>(null);
   const [editSaving, setEditSaving]         = useState(false);
-  const [showPrintAlert, setShowPrintAlert] = useState(false);
   const [viewMode, setViewMode]         = useState<ViewMode>('summary');
   const [showFilters, setShowFilters]   = useState(false);
 
@@ -86,7 +91,12 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
     const unsubReturns = onSnapshot(collection(db, 'saleReturns'), snap => {
       setSaleReturns(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     }, err => handleFirestoreError(err, OperationType.GET, 'saleReturns'));
-    return () => { unsub(); unsubReturns(); };
+    const unsubHospital = onSnapshot(doc(db, 'settings', 'hospital'), snap => {
+      setHospitalPrintProfile(snap.exists()
+        ? { ...EMPTY_HOSPITAL_PRINT_PROFILE, ...(snap.data() as HospitalPrintProfile) }
+        : EMPTY_HOSPITAL_PRINT_PROFILE);
+    }, err => handleFirestoreError(err, OperationType.GET, 'settings/hospital'));
+    return () => { unsub(); unsubReturns(); unsubHospital(); };
   }, []);
 
   const categoryOptions = useMemo(() => {
@@ -245,9 +255,36 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
   };
 
   const handlePrint = () => {
-    if (window !== window.top) { setShowPrintAlert(true); setTimeout(() => setShowPrintAlert(false), 5000); }
-    else printPageOrShare('Sales History');
+    if (!selectedSale) return;
+    const filename = `pharmacy-bill-${String(selectedSale.id || 'reprint').slice(0, 10)}.pdf`;
+    void printPharmacyDocument({
+      kind: 'bill',
+      record: selectedSale,
+      hospitalProfile: hospitalPrintProfile,
+      title: 'Pharmacy Bill (Reprint)',
+      filename,
+    });
   };
+
+  useEffect(() => {
+    if (!selectedSale) return;
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'p') return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      const filename = `pharmacy-bill-${String(selectedSale.id || 'reprint').slice(0, 10)}.pdf`;
+      void printPharmacyDocument({
+        kind: 'bill',
+        record: selectedSale,
+        hospitalProfile: hospitalPrintProfile,
+        title: 'Pharmacy Bill (Reprint)',
+        filename,
+      });
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [selectedSale, hospitalPrintProfile]);
 
   const printHistoryReport = () => {
     setSelectedSale(null);
@@ -315,52 +352,6 @@ export function SalesHistory({ userProfile }: SalesHistoryProps) {
 
   return (
     <>
-      {showPrintAlert && (
-        <div className="fixed top-4 right-4 bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg z-50">
-          <p className="font-medium">Printing blocked in preview.</p>
-          <p className="text-sm opacity-90">Press Ctrl+P / Cmd+P to print.</p>
-        </div>
-      )}
-
-      {/* Printable receipt */}
-      {selectedSale && (
-        <div className="hidden print:block w-[80mm] mx-auto bg-white text-black text-sm font-mono p-4">
-          <div className="text-center mb-4">
-            <h2 className="text-xl font-bold">GMH Suite Pharmacy</h2>
-            <p>Receipt (Reprint)</p>
-            <p>{selectedSale.date ? format(new Date(selectedSale.date), 'dd/MM/yyyy HH:mm') : 'N/A'}</p>
-            <p className="text-xs mt-1">ID: {selectedSale.id.slice(0, 8)}</p>
-            {selectedSale.customerName && <p className="text-xs mt-1">Customer: {selectedSale.customerName}</p>}
-          </div>
-          <table className="w-full mb-4">
-            <thead><tr className="border-b border-black border-dashed"><th className="text-left pb-1">Item</th><th className="text-center pb-1">Qty</th><th className="text-right pb-1">Total</th></tr></thead>
-            <tbody className="divide-y divide-gray-100 divide-dashed">
-              {selectedSale.items?.map((item: any) => (
-                <tr key={item.cartItemId}>
-                  <td className="py-1"><div className="line-clamp-1">{item.name}</div><div className="text-xs text-gray-500">{item.sellType === 'box' ? '(Box)' : '(Unit)'} @ {formatCurrency(item.price)}</div></td>
-                  <td className="text-center py-1">{item.quantity}</td>
-                  <td className="text-right py-1">{formatCurrency(item.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="border-t border-black border-dashed pt-2 space-y-1">
-            <div className="flex justify-between"><span>Subtotal:</span><span>{formatCurrency(getGross(selectedSale))}</span></div>
-            {selectedSale.discount > 0 && <div className="flex justify-between"><span>Discount:</span><span>-{formatCurrency(selectedSale.discount)}</span></div>}
-            {getSaleAccounting(selectedSale, saleReturns).returnTotal > 0 && (
-              <div className="flex justify-between"><span>Returns:</span><span>-{formatCurrency(getSaleAccounting(selectedSale, saleReturns).returnTotal)}</span></div>
-            )}
-            <div className="flex justify-between font-bold text-lg mt-2 pt-2 border-t border-black"><span>Net Total:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netTotal)}</span></div>
-            {getSaleAccounting(selectedSale, saleReturns).netPending > 0 && (
-              <>
-                <div className="flex justify-between"><span>Paid:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPaid)}</span></div>
-                <div className="flex justify-between font-bold"><span>Pending:</span><span>{formatCurrency(getSaleAccounting(selectedSale, saleReturns).netPending)}</span></div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
       {!selectedSale && (
         <div className="hidden print:block bg-white text-black p-6">
           <div className="text-center mb-5">

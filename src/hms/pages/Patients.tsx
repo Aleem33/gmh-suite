@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { collection, onSnapshot, addDoc, updateDoc, deleteDoc, doc, query, where } from '../../lib/firestoreCompat';
-import { db, getNextMRN } from '../../firebase';
+import { collection, onSnapshot, updateDoc, deleteDoc, doc, query, where } from '../../lib/firestoreCompat';
+import { db, createPatient } from '../../firebase';
 import { formatDate, formatCurrency, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
 import { Search, Plus, Edit2, Trash2, User, Phone, ChevronDown, X, FileText, BedDouble, FlaskConical, Receipt, History } from 'lucide-react';
@@ -90,9 +90,8 @@ export function Patients() {
         await updateDoc(doc(db, 'patients', editId), { ...form, age: Number(form.age), updatedAt: nowISO() });
         await logAudit('update', 'patient', editId, form.name);
       } else {
-        const mrn = await getNextMRN();
-        const ref = await addDoc(collection(db, 'patients'), { ...form, age: Number(form.age), mrn, createdAt: nowISO() });
-        await logAudit('create', 'patient', ref.id, `${form.name} (${mrn})`);
+        const created = await createPatient({ ...form, age: Number(form.age), createdAt: nowISO() });
+        await logAudit('create', 'patient', created.document.id, `${form.name} (${created.mrn})`);
       }
       setShowModal(false);
     } catch (e: any) {

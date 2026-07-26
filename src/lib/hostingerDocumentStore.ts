@@ -261,6 +261,16 @@ export class HostingerDocumentStore {
     });
   }
 
+  async createPatient(data: Record<string, any>) {
+    const response = await apiRequest<{ document: ApiDocument; mrn: string }>('/commands/patient-create', {
+      method: 'POST',
+      body: JSON.stringify({ data }),
+      idempotencyKey: createIdempotencyKey('patient-create'),
+    });
+    this.applyDocument('patients', response.document);
+    return response;
+  }
+
   private async loadCollection(collectionName: string, generation: number, userScope: string) {
     const documents: ApiDocument[] = [];
     let after = '';

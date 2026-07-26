@@ -170,9 +170,16 @@ final class Application
             if (!is_array($data)) {
                 throw new ApiException('Document data must be an object.', 422, 'invalid_document');
             }
-            $result = $this->idempotency->execute($user, $request->header('idempotency-key'), $this->requestFingerprint($request), fn (): array => [
-                'document' => $this->documentService->write($user, $params['collection'], $id, $data, 0, false),
-            ]);
+            $result = $this->idempotency->execute(
+                $user,
+                $request->header('idempotency-key'),
+                $this->requestFingerprint($request),
+                fn (): array => [
+                    'document' => $params['collection'] === 'patients'
+                        ? $this->commands->createPatientWithReservedMrn($user, $id, $data)
+                        : $this->documentService->write($user, $params['collection'], $id, $data, 0, false),
+                ],
+            );
             Response::json($result['body'], 201);
         });
 
@@ -221,6 +228,21 @@ final class Application
                 $user, (string) ($payload['counter'] ?? ''), (string) ($payload['prefix'] ?? ''),
             ));
             Response::json($result['body']);
+        });
+        $router->add('POST', $prefix . '/commands/patient-create$#', function (Request $request): never {
+            $user = $this->authenticate($request);
+            $payload = $request->json();
+            $data = $payload['data'] ?? null;
+            if (!is_array($data)) {
+                throw new ApiException('Patient data must be an object.', 422, 'invalid_patient');
+            }
+            $result = $this->idempotency->execute(
+                $user,
+                $request->header('idempotency-key'),
+                $this->requestFingerprint($request),
+                fn (): array => $this->commands->createPatient($user, $data),
+            );
+            Response::json($result['body'], 201);
         });
 
         $router->add('POST', $prefix . '/commands/(?<command>[a-z][a-z0-9-]{0,63})$#', function (Request $request, array $params): never {

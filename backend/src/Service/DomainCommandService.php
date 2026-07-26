@@ -50,6 +50,14 @@ final class DomainCommandService
         if (!preg_match('/^[a-z][a-z0-9_-]{0,31}$/', $counter) || !preg_match('/^[A-Z][A-Z0-9-]{0,15}$/', $prefix)) {
             throw new ApiException('Invalid counter.', 422, 'invalid_counter');
         }
+        if ($counter === 'mrn' && $prefix === 'MRN') {
+            $this->acquireMrnLock();
+            try {
+                return $this->allocateMrn($user);
+            } finally {
+                $this->releaseMrnLock();
+            }
+        }
         $existing = $this->documents->find('counters', $counter, forUpdate: true, includeDeleted: true);
         $value = max(0, (int) ($existing['data']['value'] ?? 0)) + 1;
         $saved = $this->documents->upsert(
@@ -61,6 +69,115 @@ final class DomainCommandService
             'formatted' => $prefix . '-' . str_pad((string) $value, 5, '0', STR_PAD_LEFT),
             'documentVersion' => $saved['version'],
         ];
+    }
+
+    /** @param array<string,mixed> $data @return array{document:array<string,mixed>,mrn:string} */
+    public function createPatient(AuthContext $user, array $data): array
+    {
+        if (array_key_exists('mrn', $data)) {
+            throw new ApiException('MRN is assigned by the server.', 422, 'mrn_server_managed');
+        }
+        $this->acquireMrnLock();
+        try {
+            $allocated = $this->allocateMrn($user);
+            $id = rtrim(strtr(base64_encode(random_bytes(15)), '+/', '-_'), '=');
+            $document = $this->documentService->write(
+                $user,
+                'patients',
+                $id,
+                [...$data, 'mrn' => $allocated['formatted']],
+                0,
+                false,
+            );
+            return ['document' => $document, 'mrn' => $allocated['formatted']];
+        } finally {
+            $this->releaseMrnLock();
+        }
+    }
+
+    /** @param array<string,mixed> $data @return array<string,mixed> */
+    public function createPatientWithReservedMrn(AuthContext $user, string $id, array $data): array
+    {
+        $mrn = (string) ($data['mrn'] ?? '');
+        if (!preg_match('/^MRN-(\d+)$/', $mrn, $matches) || (int) $matches[1] < 1) {
+            throw new ApiException('A valid reserved MRN is required.', 422, 'invalid_mrn');
+        }
+        $number = (int) $matches[1];
+        $this->acquireMrnLock();
+        try {
+            $patientMrns = $this->lockActivePatientMrns();
+            if (isset($patientMrns['numbers'][$number])) {
+                throw new ApiException('This MRN is already assigned to another patient.', 409, 'duplicate_mrn');
+            }
+            $counter = $this->documents->find('counters', 'mrn', forUpdate: true, includeDeleted: true);
+            if (!$counter || $number > max(0, (int) ($counter['data']['value'] ?? 0))) {
+                throw new ApiException('This MRN was not reserved by the server.', 409, 'unreserved_mrn');
+            }
+            return $this->documentService->write($user, 'patients', $id, $data, 0, false);
+        } finally {
+            $this->releaseMrnLock();
+        }
+    }
+
+    /** @return array{value:int,formatted:string,documentVersion:int} */
+    private function allocateMrn(AuthContext $user): array
+    {
+        $patientMrns = $this->lockActivePatientMrns();
+        $maximumPatientMrn = $patientMrns['maximum'];
+        $existing = $this->documents->find('counters', 'mrn', forUpdate: true, includeDeleted: true);
+        $value = max($maximumPatientMrn, max(0, (int) ($existing['data']['value'] ?? 0))) + 1;
+        $saved = $this->documents->upsert(
+            'counters',
+            'mrn',
+            ['value' => $value],
+            $existing ? (int) $existing['version'] : 0,
+            $user->uid,
+            $user->username(),
+            true,
+        );
+        return [
+            'value' => $value,
+            'formatted' => 'MRN-' . str_pad((string) $value, 5, '0', STR_PAD_LEFT),
+            'documentVersion' => $saved['version'],
+        ];
+    }
+
+    /** @return array{maximum:int,numbers:array<int,bool>} */
+    private function lockActivePatientMrns(): array
+    {
+        $maximum = 0;
+        $numbers = [];
+        $statement = $this->pdo->query(
+            "SELECT data FROM documents
+              WHERE collection_name = 'patients' AND deleted_at IS NULL
+              ORDER BY document_id FOR UPDATE"
+        );
+        foreach ($statement->fetchAll() as $row) {
+            $data = json_decode((string) $row['data'], true, 512, JSON_THROW_ON_ERROR);
+            if (preg_match('/^MRN-(\d+)$/', (string) ($data['mrn'] ?? ''), $matches)) {
+                $number = (int) $matches[1];
+                if ($number > 0) {
+                    $maximum = max($maximum, $number);
+                    $numbers[$number] = true;
+                }
+            }
+        }
+        return ['maximum' => $maximum, 'numbers' => $numbers];
+    }
+
+    private function acquireMrnLock(): void
+    {
+        $statement = $this->pdo->prepare('SELECT GET_LOCK(?, 15)');
+        $statement->execute(['gmh:mrn-sequence']);
+        if ((int) $statement->fetchColumn() !== 1) {
+            throw new ApiException('Patient registration is busy. Please try again.', 409, 'mrn_lock_timeout');
+        }
+    }
+
+    private function releaseMrnLock(): void
+    {
+        $statement = $this->pdo->prepare('SELECT RELEASE_LOCK(?)');
+        $statement->execute(['gmh:mrn-sequence']);
     }
 
     /** @param array<string,mixed> $payload @return array<string,mixed> */

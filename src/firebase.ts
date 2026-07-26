@@ -56,6 +56,10 @@ export async function getNextMRN(): Promise<string> {
   return (await hostingerDocumentStore.nextCounter('mrn', 'MRN')).formatted;
 }
 
+export async function createPatient(data: Record<string, any>) {
+  return hostingerDocumentStore.createPatient(data);
+}
+
 export async function getNextBillNo(): Promise<string> {
   return (await hostingerDocumentStore.nextCounter('bill', 'BILL')).formatted;
 }

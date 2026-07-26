@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { collection, onSnapshot, addDoc, updateDoc, doc, getDoc, query, where, getDocs, runTransaction } from '../../lib/firestoreCompat';
-import { db, auth, getNextMRN, getNextBillNo } from '../../firebase';
+import { db, auth, createPatient, getNextBillNo } from '../../firebase';
 import { formatDate, today, nowISO } from '../lib/utils';
 import { logAudit } from '../lib/audit';
 import { useNavigate } from 'react-router-dom';
@@ -200,10 +200,9 @@ export function Appointments() {
 
       // Create new patient if needed
       if (patientMode === 'new') {
-        const mrn = await getNextMRN();
-        const ref = await addDoc(collection(db, 'patients'), { ...newPt, age: Number(newPt.age) || 0, mrn, createdAt: nowISO() });
-        await logAudit('create', 'patient', ref.id, `${newPt.name} (${mrn}) — via appointment`);
-        patientId = ref.id; patientName = newPt.name; patientMRN = mrn;
+        const created = await createPatient({ ...newPt, age: Number(newPt.age) || 0, createdAt: nowISO() });
+        await logAudit('create', 'patient', created.document.id, `${newPt.name} (${created.mrn}) — via appointment`);
+        patientId = created.document.id; patientName = newPt.name; patientMRN = created.mrn;
         patientAge = newPt.age; patientGender = newPt.gender;
       }
 

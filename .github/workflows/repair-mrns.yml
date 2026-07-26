@@ -1,0 +1,91 @@
+name: Repair Production MRNs
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Run a read-only report or apply a previously reviewed plan'
+        required: true
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - apply
+      expected_plan_sha:
+        description: 'Required for apply: planSha256 from the latest dry run'
+        required: false
+        type: string
+      confirmation:
+        description: 'Required for apply: enter REPAIR_MRNS'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: ${{ inputs.mode == 'apply' && 'Apply MRN repair' || 'MRN repair dry run' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      SSH_HOST: ${{ secrets.HOSTINGER_SSH_HOST }}
+      SSH_PORT: ${{ secrets.HOSTINGER_SSH_PORT }}
+      SSH_USER: ${{ secrets.HOSTINGER_SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.HOSTINGER_SSH_KNOWN_HOSTS }}
+      BACKEND_PATH: ${{ vars.HOSTINGER_BACKEND_PATH }}
+      MODE: ${{ inputs.mode }}
+      EXPECTED_PLAN_SHA: ${{ inputs.expected_plan_sha }}
+      CONFIRMATION: ${{ inputs.confirmation }}
+
+    steps:
+      - name: Validate inputs
+        shell: bash
+        run: |
+          : "${SSH_HOST:?Add HOSTINGER_SSH_HOST to the production environment secrets}"
+          : "${SSH_PORT:?Add HOSTINGER_SSH_PORT to the production environment secrets}"
+          : "${SSH_USER:?Add HOSTINGER_SSH_USER to the production environment secrets}"
+          : "${SSH_PRIVATE_KEY:?Add HOSTINGER_SSH_PRIVATE_KEY to the production environment secrets}"
+          : "${BACKEND_PATH:?Add HOSTINGER_BACKEND_PATH to the production environment variables}"
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          [[ "$BACKEND_PATH" =~ ^/home/[A-Za-z0-9_-]+/domains/[A-Za-z0-9.-]+/[A-Za-z0-9._/-]+$ ]]
+          [[ "$MODE" == "dry-run" || "$MODE" == "apply" ]]
+          if [[ "$MODE" == "apply" ]]; then
+            [[ "$EXPECTED_PLAN_SHA" =~ ^[a-f0-9]{64}$ ]]
+            [[ "$CONFIRMATION" == "REPAIR_MRNS" ]]
+          fi
+
+      - name: Configure trusted SSH connection
+        shell: bash
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -T 20 -p "$SSH_PORT" "$SSH_HOST" > ~/.ssh/known_hosts
+          fi
+          test -s ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/id_ed25519 ~/.ssh/known_hosts
+
+      - name: Verify deployed repair command
+        shell: bash
+        run: |
+          ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "$SSH_USER@$SSH_HOST" \
+            "test -f '$BACKEND_PATH/scripts/repair-mrns.php' && test -f '$BACKEND_PATH/.env'"
+
+      - name: Run MRN repair
+        shell: bash
+        run: |
+          if [[ "$MODE" == "dry-run" ]]; then
+            ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "$SSH_USER@$SSH_HOST" \
+              "cd '$BACKEND_PATH' && php scripts/repair-mrns.php --dry-run"
+          else
+            ssh -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "$SSH_USER@$SSH_HOST" \
+              "cd '$BACKEND_PATH' && php scripts/repair-mrns.php --apply --expected-plan-sha='$EXPECTED_PLAN_SHA'"
+          fi

@@ -6,6 +6,7 @@ namespace GMH\Backend\Tests\Integration;
 
 use GMH\Backend\Auth\AuthContext;
 use GMH\Backend\Auth\Policy;
+use GMH\Backend\Http\ApiException;
 use GMH\Backend\Repository\DocumentRepository;
 use GMH\Backend\Repository\EventRepository;
 use GMH\Backend\Service\BackupService;
@@ -120,6 +121,22 @@ final class MrnIntegrityTest extends TestCase
             $this->admin->username(),
         );
         self::assertSame('MRN-00201', $this->nextMrn('higher')['formatted']);
+
+        try {
+            $this->idempotency->execute(
+                $this->admin,
+                'mrn-test-legacy-' . bin2hex(random_bytes(5)),
+                'legacy-patient-create',
+                fn (): array => $this->commands->createPatientWithReservedMrn(
+                    $this->admin,
+                    'mrn-test-legacy-duplicate',
+                    ['name' => 'Duplicate', 'mrn' => 'MRN-00137'],
+                ),
+            );
+            self::fail('The legacy endpoint must reject an already assigned MRN.');
+        } catch (ApiException $exception) {
+            self::assertSame('duplicate_mrn', $exception->errorCode);
+        }
     }
 
     public function testRepairRenumbersNewerDuplicatesUpdatesLinksAndKeepsBusinessCounts(): void

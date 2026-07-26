@@ -170,9 +170,16 @@ final class Application
             if (!is_array($data)) {
                 throw new ApiException('Document data must be an object.', 422, 'invalid_document');
             }
-            $result = $this->idempotency->execute($user, $request->header('idempotency-key'), $this->requestFingerprint($request), fn (): array => [
-                'document' => $this->documentService->write($user, $params['collection'], $id, $data, 0, false),
-            ]);
+            $result = $this->idempotency->execute(
+                $user,
+                $request->header('idempotency-key'),
+                $this->requestFingerprint($request),
+                fn (): array => [
+                    'document' => $params['collection'] === 'patients'
+                        ? $this->commands->createPatientWithReservedMrn($user, $id, $data)
+                        : $this->documentService->write($user, $params['collection'], $id, $data, 0, false),
+                ],
+            );
             Response::json($result['body'], 201);
         });
 

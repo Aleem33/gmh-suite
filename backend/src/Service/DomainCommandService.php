@@ -95,22 +95,35 @@ final class DomainCommandService
         }
     }
 
+    /** @param array<string,mixed> $data @return array<string,mixed> */
+    public function createPatientWithReservedMrn(AuthContext $user, string $id, array $data): array
+    {
+        $mrn = (string) ($data['mrn'] ?? '');
+        if (!preg_match('/^MRN-(\d+)$/', $mrn, $matches) || (int) $matches[1] < 1) {
+            throw new ApiException('A valid reserved MRN is required.', 422, 'invalid_mrn');
+        }
+        $number = (int) $matches[1];
+        $this->acquireMrnLock();
+        try {
+            $patientMrns = $this->lockActivePatientMrns();
+            if (isset($patientMrns['numbers'][$number])) {
+                throw new ApiException('This MRN is already assigned to another patient.', 409, 'duplicate_mrn');
+            }
+            $counter = $this->documents->find('counters', 'mrn', forUpdate: true, includeDeleted: true);
+            if (!$counter || $number > max(0, (int) ($counter['data']['value'] ?? 0))) {
+                throw new ApiException('This MRN was not reserved by the server.', 409, 'unreserved_mrn');
+            }
+            return $this->documentService->write($user, 'patients', $id, $data, 0, false);
+        } finally {
+            $this->releaseMrnLock();
+        }
+    }
+
     /** @return array{value:int,formatted:string,documentVersion:int} */
     private function allocateMrn(AuthContext $user): array
     {
-        $maximumPatientMrn = 0;
-        $statement = $this->pdo->query(
-            "SELECT data FROM documents
-              WHERE collection_name = 'patients' AND deleted_at IS NULL
-              ORDER BY document_id FOR UPDATE"
-        );
-        foreach ($statement->fetchAll() as $row) {
-            $data = json_decode((string) $row['data'], true, 512, JSON_THROW_ON_ERROR);
-            if (preg_match('/^MRN-(\d+)$/', (string) ($data['mrn'] ?? ''), $matches)) {
-                $maximumPatientMrn = max($maximumPatientMrn, (int) $matches[1]);
-            }
-        }
-
+        $patientMrns = $this->lockActivePatientMrns();
+        $maximumPatientMrn = $patientMrns['maximum'];
         $existing = $this->documents->find('counters', 'mrn', forUpdate: true, includeDeleted: true);
         $value = max($maximumPatientMrn, max(0, (int) ($existing['data']['value'] ?? 0))) + 1;
         $saved = $this->documents->upsert(
@@ -127,6 +140,29 @@ final class DomainCommandService
             'formatted' => 'MRN-' . str_pad((string) $value, 5, '0', STR_PAD_LEFT),
             'documentVersion' => $saved['version'],
         ];
+    }
+
+    /** @return array{maximum:int,numbers:array<int,bool>} */
+    private function lockActivePatientMrns(): array
+    {
+        $maximum = 0;
+        $numbers = [];
+        $statement = $this->pdo->query(
+            "SELECT data FROM documents
+              WHERE collection_name = 'patients' AND deleted_at IS NULL
+              ORDER BY document_id FOR UPDATE"
+        );
+        foreach ($statement->fetchAll() as $row) {
+            $data = json_decode((string) $row['data'], true, 512, JSON_THROW_ON_ERROR);
+            if (preg_match('/^MRN-(\d+)$/', (string) ($data['mrn'] ?? ''), $matches)) {
+                $number = (int) $matches[1];
+                if ($number > 0) {
+                    $maximum = max($maximum, $number);
+                    $numbers[$number] = true;
+                }
+            }
+        }
+        return ['maximum' => $maximum, 'numbers' => $numbers];
     }
 
     private function acquireMrnLock(): void

@@ -1,4 +1,5 @@
 node_modules/
+.tools/
 backend/vendor/
 backend/.env
 backend/.phpunit.cache/

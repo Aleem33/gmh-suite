@@ -143,10 +143,28 @@ The `Build Release Artifacts` workflow can deploy the tested web and backend art
    - `HOSTINGER_BACKEND_PATH=/home/u457184656/domains/aleemcore.com/gmh-backend`
    - `HOSTINGER_HEALTH_URL=https://gmh.aleemcore.com/api/v1/health`
 5. Keep `FIREBASE_CONFIG_JSON` in GitHub Actions secrets and set repository variable `VITE_API_BASE_URL` to the absolute API URL used by Android and Windows.
-6. Run **Actions > Build Release Artifacts > Run workflow**, enable `deploy_hostinger`, and enter the API URL. For normal releases, push a version-matching tag such as `v3.2.1` after CI passes.
+6. Run **Actions > Build Release Artifacts > Run workflow**, enable `deploy_hostinger`, and enter the API URL. For normal releases, push a version-matching tag such as `v3.2.2` after CI passes.
 
 The workflow references a GitHub environment named `production` for deployment history. Creating that environment is optional; use its protection rules for a manual approval gate when the repository plan supports them.
 
 The workflow never uploads or removes the server `.env`, service-account key, database backup, or MySQL credentials. It uploads frontend assets before `index.html` and verifies the live health endpoint after deployment.
 
 Delete expired `idempotency_keys` periodically and monitor `document_events` for `dead` events. A Firestore mirror error never rolls back a successful MySQL operation.
+
+## MRN Integrity Repair
+
+Release 3.2.2 makes patient creation and MRN allocation one atomic backend command. It also reconciles a missing or stale MRN counter against the highest active patient MRN before allocating a new number.
+
+Use the **Repair Production MRNs** GitHub workflow only during a patient-registration maintenance window:
+
+1. Run it in `dry-run` mode and review the PHI-free mappings and `planSha256`.
+2. Keep registration paused and rerun it in `apply` mode with that exact SHA and confirmation `REPAIR_MRNS`.
+3. The apply command locks MRN allocation, creates and verifies a private full backup under `BACKUP_DIRECTORY`, renumbers only newer duplicate patients, updates linked `patientMRN` fields, and verifies record counts before committing.
+4. Run `dry-run` again. It must report zero duplicate groups and zero pending changes before registration reopens.
+
+The same commands can be run over SSH from the private backend directory:
+
+```bash
+php scripts/repair-mrns.php --dry-run
+php scripts/repair-mrns.php --apply --expected-plan-sha=DRY_RUN_SHA256
+```

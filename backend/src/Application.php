@@ -222,6 +222,21 @@ final class Application
             ));
             Response::json($result['body']);
         });
+        $router->add('POST', $prefix . '/commands/patient-create$#', function (Request $request): never {
+            $user = $this->authenticate($request);
+            $payload = $request->json();
+            $data = $payload['data'] ?? null;
+            if (!is_array($data)) {
+                throw new ApiException('Patient data must be an object.', 422, 'invalid_patient');
+            }
+            $result = $this->idempotency->execute(
+                $user,
+                $request->header('idempotency-key'),
+                $this->requestFingerprint($request),
+                fn (): array => $this->commands->createPatient($user, $data),
+            );
+            Response::json($result['body'], 201);
+        });
 
         $router->add('POST', $prefix . '/commands/(?<command>[a-z][a-z0-9-]{0,63})$#', function (Request $request, array $params): never {
             $user = $this->authenticate($request);

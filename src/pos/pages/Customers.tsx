@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   collection, onSnapshot, addDoc, updateDoc, deleteDoc,
-  doc, increment, query, orderBy, getDocs, where, runTransaction
+  doc, query, orderBy, getDocs, where, runTransaction
 } from '../../lib/firestoreCompat';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../lib/utils';
@@ -146,7 +146,9 @@ export function Customers({ userProfile }: CustomersProps) {
           throw new Error('The sale or customer record no longer exists.');
         }
         const currentSale = saleSnapshot.data();
+        const currentCustomer = customerSnapshot.data();
         const currentPending = Number(currentSale.pendingAmount || 0);
+        const currentCreditBalance = Number(currentCustomer.creditBalance || 0);
         if (amount > currentPending) {
           throw new Error(`Only ${formatCurrency(currentPending)} remains pending on this receipt.`);
         }
@@ -162,7 +164,7 @@ export function Customers({ userProfile }: CustomersProps) {
           pendingAmount: currentPending - amount,
           amountPaid: Math.min(Number(currentSale.total || 0), Number(currentSale.amountPaid || 0) + amount),
         });
-        tx.update(customerRef, { creditBalance: increment(-amount) });
+        tx.update(customerRef, { creditBalance: Math.max(0, currentCreditBalance - amount) });
       });
 
       const remainingBalance = maxPayable - amount;

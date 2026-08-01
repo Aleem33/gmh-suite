@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { collection, doc, increment, onSnapshot, runTransaction, updateDoc } from '../../lib/firestoreCompat';
+import { collection, doc, onSnapshot, runTransaction, updateDoc } from '../../lib/firestoreCompat';
 import { CheckCircle, Clock, CreditCard, LoaderCircle, Receipt, RotateCcw, ShoppingCart, X } from 'lucide-react';
 import { auth, db, handleFirestoreError, OperationType } from '../../firebase';
 import { formatCurrency } from '../../pos/lib/utils';
@@ -107,7 +107,9 @@ export function Approvals() {
         if (!customerSnap.exists()) throw new Error('The linked customer record was not found.');
 
         const sale = saleSnap.data();
+        const customer = customerSnap.data();
         const currentPending = Number(sale.pendingAmount || 0);
+        const currentCreditBalance = Number(customer.creditBalance || 0);
         const amount = Math.min(Number(request.amount || 0), currentPending);
         if (!Number.isFinite(amount) || amount <= 0) {
           throw new Error('This receipt no longer has a payable pending amount.');
@@ -128,7 +130,7 @@ export function Approvals() {
           pendingAmount: Math.max(0, currentPending - amount),
           amountPaid: Math.min(Number(sale.total || 0), Number(sale.amountPaid || 0) + amount),
         });
-        tx.update(customerRef, { creditBalance: increment(-amount) });
+        tx.update(customerRef, { creditBalance: Math.max(0, currentCreditBalance - amount) });
         tx.update(requestRef, {
           status: 'approved',
           approvedAmount: amount,

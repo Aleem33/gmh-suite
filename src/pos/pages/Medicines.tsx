@@ -7,6 +7,7 @@ import { Plus, Edit2, Trash2, Search, AlertCircle, Upload, Download, X } from 'l
 import { format, isBefore, addDays } from 'date-fns';
 import Papa from 'papaparse';
 import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
+import { useSearchParams } from 'react-router-dom';
 
 const ITEM_CATEGORIES = ['Medicine', 'Cold Drinks', 'Snacks', 'Grocery', 'Personal Care', 'Other'];
 
@@ -15,6 +16,7 @@ interface MedicinesProps {
 }
 
 export function Medicines({ userProfile }: MedicinesProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [medicines, setMedicines]       = useState<any[]>([]);
   const [search, setSearch]             = useState('');
   const [isModalOpen, setIsModalOpen]   = useState(false);
@@ -44,12 +46,37 @@ export function Medicines({ userProfile }: MedicinesProps) {
     return () => unsub();
   }, []);
 
-  const filteredMedicines = medicines.filter(m =>
-    m.name.toLowerCase().includes(search.toLowerCase()) ||
-    (m.category || '').toLowerCase().includes(search.toLowerCase()) ||
-    (m.form || '').toLowerCase().includes(search.toLowerCase()) ||
-    (m.batchNo || '').toLowerCase().includes(search.toLowerCase())
-  );
+  const requestedStockFilter = searchParams.get('stock');
+  const stockFilter = requestedStockFilter === 'low' || requestedStockFilter === 'out'
+    ? requestedStockFilter
+    : 'all';
+  const stockValue = (med: any) => Number(med.stock || 0);
+  const reorderThreshold = (med: any) => Number(med.reorderLevel || (med.unitsPerBox || 1) * 2);
+  const isOutOfStock = (med: any) => stockValue(med) <= 0;
+  const isLowStock = (med: any) => stockValue(med) > 0 && stockValue(med) <= reorderThreshold(med);
+  const lowStockCount = medicines.filter(isLowStock).length;
+  const outOfStockCount = medicines.filter(isOutOfStock).length;
+
+  const filteredMedicines = medicines.filter(m => {
+    const matchesSearch =
+      (m.name || '').toLowerCase().includes(search.toLowerCase()) ||
+      (m.category || '').toLowerCase().includes(search.toLowerCase()) ||
+      (m.form || '').toLowerCase().includes(search.toLowerCase()) ||
+      (m.batchNo || '').toLowerCase().includes(search.toLowerCase());
+    const matchesStock = stockFilter === 'low'
+      ? isLowStock(m)
+      : stockFilter === 'out'
+        ? isOutOfStock(m)
+        : true;
+    return matchesSearch && matchesStock;
+  });
+
+  const setStockFilter = (nextFilter: 'all' | 'low' | 'out') => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (nextFilter === 'all') nextParams.delete('stock');
+    else nextParams.set('stock', nextFilter);
+    setSearchParams(nextParams, { replace: true });
+  };
 
   const handleRetailPriceChange = (retail: string, units: string) => {
     const rPrice = parseFloat(retail);
@@ -170,8 +197,6 @@ export function Medicines({ userProfile }: MedicinesProps) {
     return `${loose} Loose`;
   };
 
-  const lowStock = (med: any) => med.stock <= (med.unitsPerBox || 1) * 2;
-
   return (
     <div className="space-y-4 md:space-y-6">
 
@@ -221,6 +246,20 @@ export function Medicines({ userProfile }: MedicinesProps) {
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
         <div className="p-4 border-b border-gray-100">
+          <div className="flex flex-wrap gap-2 mb-3" aria-label="Stock filters">
+            <button type="button" onClick={() => setStockFilter('all')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${stockFilter === 'all' ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+              All ({medicines.length})
+            </button>
+            <button type="button" onClick={() => setStockFilter('low')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${stockFilter === 'low' ? 'bg-orange-600 border-orange-600 text-white' : 'bg-orange-50 border-orange-200 text-orange-700 hover:bg-orange-100'}`}>
+              Low Stock ({lowStockCount})
+            </button>
+            <button type="button" onClick={() => setStockFilter('out')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${stockFilter === 'out' ? 'bg-red-600 border-red-600 text-white' : 'bg-red-50 border-red-200 text-red-700 hover:bg-red-100'}`}>
+              Out of Stock ({outOfStockCount})
+            </button>
+          </div>
           <div className="relative">
             <Search className="w-5 h-5 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
             <input type="text" placeholder="Search by name or batch no..."
@@ -258,7 +297,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${lowStock(med) ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                <span className={`px-2 py-1 rounded-full text-xs font-semibold ${isOutOfStock(med) ? 'bg-red-100 text-red-800' : isLowStock(med) ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>
                   {formatStock(med.stock, med.unitsPerBox)}
                 </span>
                 <span className="px-2 py-1 rounded-full text-xs bg-blue-50 text-blue-700 font-medium">
@@ -298,7 +337,7 @@ export function Medicines({ userProfile }: MedicinesProps) {
                   </td>
                   <td className="p-4 text-gray-600">{med.batchNo}</td>
                   <td className="p-4">
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${lowStock(med) ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${isOutOfStock(med) ? 'bg-red-100 text-red-800' : isLowStock(med) ? 'bg-orange-100 text-orange-800' : 'bg-green-100 text-green-800'}`}>
                       {formatStock(med.stock, med.unitsPerBox)}
                     </span>
                   </td>

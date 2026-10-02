@@ -9,7 +9,7 @@ import { formatCurrency } from '../lib/utils';
 import { printOrShare } from '../lib/nativeUtils';
 import {
   Plus, Edit2, Trash2, Search, ChevronDown, ChevronUp,
-  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Printer, ShoppingCart
+  Eye, X, Wallet, CheckCircle, Clock, CreditCard, Printer, ShoppingCart, Undo2
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { hasPermission, isAdminProfile, type UserProfile } from '../../lib/permissions';
@@ -36,6 +36,9 @@ export function Customers({ userProfile }: CustomersProps) {
   const [paymentAmount, setPaymentAmount]   = useState('');
   const [paymentNote, setPaymentNote]       = useState('');
   const [paymentLoading, setPaymentLoading] = useState(false);
+  const [reimbursementModal, setReimbursementModal] = useState<any | null>(null);
+  const [reimbursementReason, setReimbursementReason] = useState('');
+  const [reimbursementLoading, setReimbursementLoading] = useState(false);
 
   const [formData, setFormData] = useState({ name: '', phone: '', creditBalance: '0' });
   const isAdmin = isAdminProfile(userProfile);
@@ -82,6 +85,16 @@ export function Customers({ userProfile }: CustomersProps) {
   const customerPayments = (customerId: string) =>
     payments.filter(p => p.customerId === customerId);
 
+  const receiptPaymentBalance = (saleId: string) =>
+    payments
+      .filter(p => p.saleId === saleId)
+      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+
+  const receiptReimbursableAmount = (sale: any) => Math.max(0, Math.min(
+    Number(sale.amountPaid ?? sale.total ?? 0),
+    receiptPaymentBalance(sale.id),
+  ));
+
   const getCustomerTotals = (customerId: string) => {
     const rows = customerSales(customerId);
     return {
@@ -98,6 +111,14 @@ export function Customers({ userProfile }: CustomersProps) {
     setPaymentModal({ customer: cust, sale });
     setPaymentAmount('');
     setPaymentNote('');
+  };
+
+  const openReceiptReimbursement = (cust: any, sale: any) => {
+    if (!canRecordPayments || Number(sale.pendingAmount || 0) > 0) return;
+    const amount = receiptReimbursableAmount(sale);
+    if (amount <= 0) return;
+    setReimbursementModal({ customer: cust, sale, amount });
+    setReimbursementReason('');
   };
 
   const pendingPaymentRequest = (saleId: string) =>
@@ -176,6 +197,86 @@ export function Customers({ userProfile }: CustomersProps) {
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'customerPayments');
     } finally { setPaymentLoading(false); }
+  };
+
+  const handleReimbursement = async () => {
+    if (!canRecordPayments || !reimbursementModal?.customer || !reimbursementModal?.sale) return;
+    const reason = reimbursementReason.trim();
+    if (!reason) return;
+
+    const customer = reimbursementModal.customer;
+    const sale = reimbursementModal.sale;
+    const requestedAmount = Number(reimbursementModal.amount || 0);
+    const receiptPayments = payments.filter(payment => payment.saleId === sale.id);
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0 || receiptPayments.length === 0) return;
+
+    setReimbursementLoading(true);
+    try {
+      const reimbursementRef = doc(collection(db, 'customerPayments'));
+      await runTransaction(db, async tx => {
+        const saleRef = doc(db, 'sales', sale.id);
+        const customerRef = doc(db, 'customers', customer.id);
+        const saleSnapshot = await tx.get(saleRef);
+        const customerSnapshot = await tx.get(customerRef);
+        if (!saleSnapshot.exists() || !customerSnapshot.exists()) {
+          throw new Error('The sale or customer record no longer exists.');
+        }
+
+        const currentSale = saleSnapshot.data();
+        const currentCustomer = customerSnapshot.data();
+        if (currentSale.customerId !== customer.id) {
+          throw new Error('This receipt is no longer linked to the selected customer.');
+        }
+
+        const currentPending = Number(currentSale.pendingAmount || 0);
+        const currentPaid = Number(currentSale.amountPaid ?? currentSale.total ?? 0);
+        const currentCreditBalance = Number(currentCustomer.creditBalance || 0);
+        if (currentPending > 0.00001) {
+          throw new Error('This receipt is already pending. Refresh the customer record and try again.');
+        }
+
+        let currentPaymentBalance = 0;
+        for (const payment of receiptPayments) {
+          const paymentSnapshot = await tx.get(doc(db, 'customerPayments', payment.id));
+          if (paymentSnapshot.exists()) currentPaymentBalance += Number(paymentSnapshot.data().amount || 0);
+        }
+        const maximumReimbursement = Math.max(0, Math.min(currentPaid, currentPaymentBalance));
+        if (requestedAmount > maximumReimbursement + 0.00001) {
+          throw new Error(`Only ${formatCurrency(maximumReimbursement)} can be reimbursed for this receipt.`);
+        }
+
+        const reimbursedAt = new Date().toISOString();
+        tx.set(reimbursementRef, {
+          type: 'reimbursement',
+          customerId: customer.id,
+          customerName: customer.name,
+          saleId: sale.id,
+          amount: -requestedAmount,
+          reimbursementAmount: requestedAmount,
+          note: reason,
+          date: reimbursedAt,
+          reimbursedBy: auth.currentUser?.uid || 'unknown',
+          reimbursedByName: userProfile?.name || userProfile?.username || 'Employee',
+        });
+        tx.update(saleRef, {
+          pendingAmount: currentPending + requestedAmount,
+          amountPaid: Math.max(0, currentPaid - requestedAmount),
+        });
+        tx.update(customerRef, {
+          creditBalance: currentCreditBalance + requestedAmount,
+        });
+      });
+
+      setReimbursementModal(null);
+      setReimbursementReason('');
+      setSelectedSale(null);
+      setSuccessMsg(`${formatCurrency(requestedAmount)} reimbursed. The receipt is pending again.`);
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'customerPayments');
+    } finally {
+      setReimbursementLoading(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -291,6 +392,8 @@ export function Customers({ userProfile }: CustomersProps) {
   const isPayValid = payAmount > 0 && payAmount <= maxPayable;
   const willClear  = payAmount === maxPayable;
   const paymentSubmitLabel = canRecordPayments ? 'Record Payment' : 'Send for Approval';
+  const reimbursementAmount = Number(reimbursementModal?.amount || 0);
+  const isReimbursementValid = reimbursementAmount > 0 && reimbursementReason.trim().length > 0;
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -473,6 +576,14 @@ export function Customers({ userProfile }: CustomersProps) {
                                   <Wallet className="w-3.5 h-3.5" /> {pendingPaymentRequest(sale.id) ? 'Approval Pending' : canRecordPayments ? 'Pay This Receipt' : 'Request Payment Approval'}
                                 </button>
                               )}
+                              {canRecordPayments && Number(sale.pendingAmount || 0) <= 0 && receiptReimbursableAmount(sale) > 0 && (
+                                <button
+                                  onClick={() => openReceiptReimbursement(cust, sale)}
+                                  className="mt-3 w-full flex items-center justify-center gap-1.5 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                                >
+                                  <Undo2 className="w-3.5 h-3.5" /> Reimburse &amp; Make Pending
+                                </button>
+                              )}
                             </div>
                           ))}
                           {/* Mobile totals */}
@@ -528,6 +639,12 @@ export function Customers({ userProfile }: CustomersProps) {
                                           <Wallet className="w-3.5 h-3.5" /> {pendingPaymentRequest(sale.id) ? 'Pending' : canRecordPayments ? 'Pay' : 'Request'}
                                         </button>
                                       )}
+                                      {canRecordPayments && Number(sale.pendingAmount || 0) <= 0 && receiptReimbursableAmount(sale) > 0 && (
+                                        <button onClick={() => openReceiptReimbursement(cust, sale)}
+                                          className="inline-flex items-center gap-1 rounded-md border border-orange-300 bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-700 hover:bg-orange-100">
+                                          <Undo2 className="w-3.5 h-3.5" /> Reimburse
+                                        </button>
+                                      )}
                                       <button onClick={() => setSelectedSale(sale)}
                                         className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-medium">
                                         <Eye className="w-3.5 h-3.5" /> View
@@ -561,21 +678,28 @@ export function Customers({ userProfile }: CustomersProps) {
                         {/* Mobile: cards */}
                         <div className="space-y-2 md:hidden">
                           {custPayments.map(p => (
-                            <div key={p.id} className="bg-white rounded-lg border border-green-100 p-3 flex items-center justify-between gap-2">
+                            <div key={p.id} className={`bg-white rounded-lg border p-3 flex items-center justify-between gap-2 ${p.type === 'reimbursement' || Number(p.amount || 0) < 0 ? 'border-orange-200' : 'border-green-100'}`}>
                               <div>
                                 <div className="flex items-center gap-1 text-xs text-gray-500">
                                   <Clock className="w-3 h-3" />
                                   {p.date ? format(new Date(p.date), 'MMM dd, yyyy HH:mm') : 'N/A'}
                                 </div>
+                                {(p.type === 'reimbursement' || Number(p.amount || 0) < 0) && (
+                                  <p className="text-[10px] font-bold uppercase tracking-wide text-orange-700 mt-0.5">Reimbursement</p>
+                                )}
                                 {p.saleId && <p className="text-[10px] text-gray-400 mt-0.5">Receipt: {p.saleId.slice(0, 10)}...</p>}
                                 {p.note && <p className="text-xs text-gray-400 italic mt-0.5">{p.note}</p>}
                               </div>
-                              <span className="font-bold text-green-700 text-sm shrink-0">+{formatCurrency(p.amount)}</span>
+                              <span className={`font-bold text-sm shrink-0 ${p.type === 'reimbursement' || Number(p.amount || 0) < 0 ? 'text-orange-700' : 'text-green-700'}`}>
+                                {p.type === 'reimbursement' || Number(p.amount || 0) < 0
+                                  ? `-${formatCurrency(Math.abs(Number(p.amount || 0)))}`
+                                  : `+${formatCurrency(Number(p.amount || 0))}`}
+                              </span>
                             </div>
                           ))}
                           <div className="bg-green-100 rounded-lg p-3 flex justify-between items-center">
-                            <span className="text-xs font-bold text-green-800">TOTAL RECEIVED</span>
-                            <span className="text-sm font-bold text-green-700">{formatCurrency(custPayments.reduce((s, p) => s + (p.amount || 0), 0))}</span>
+                            <span className="text-xs font-bold text-green-800">NET RECEIVED</span>
+                            <span className="text-sm font-bold text-green-700">{formatCurrency(custPayments.reduce((s, p) => s + Number(p.amount || 0), 0))}</span>
                           </div>
                         </div>
 
@@ -598,8 +722,15 @@ export function Customers({ userProfile }: CustomersProps) {
                                       {p.date ? format(new Date(p.date), 'MMM dd, yyyy HH:mm') : 'N/A'}
                                     </div>
                                   </td>
-                                  <td className="p-3 text-right font-bold text-green-700">+{formatCurrency(p.amount)}</td>
+                                  <td className={`p-3 text-right font-bold ${p.type === 'reimbursement' || Number(p.amount || 0) < 0 ? 'text-orange-700' : 'text-green-700'}`}>
+                                    {p.type === 'reimbursement' || Number(p.amount || 0) < 0
+                                      ? `-${formatCurrency(Math.abs(Number(p.amount || 0)))}`
+                                      : `+${formatCurrency(Number(p.amount || 0))}`}
+                                  </td>
                                   <td className="p-3 text-gray-500 text-xs italic">
+                                    {(p.type === 'reimbursement' || Number(p.amount || 0) < 0) && (
+                                      <span className="mr-1 rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold not-italic uppercase text-orange-700">Reimbursement</span>
+                                    )}
                                     {p.saleId && <span className="not-italic text-gray-400">Receipt {p.saleId.slice(0, 10)}...</span>}
                                     {p.saleId && p.note ? <span className="mx-1 text-gray-300">/</span> : null}
                                     {p.note || (!p.saleId ? '-' : '')}
@@ -609,8 +740,8 @@ export function Customers({ userProfile }: CustomersProps) {
                             </tbody>
                             <tfoot>
                               <tr className="bg-green-50 border-t-2 border-green-200 text-xs font-bold">
-                                <td className="p-3 text-green-800">TOTAL RECEIVED</td>
-                                <td className="p-3 text-right text-green-700">{formatCurrency(custPayments.reduce((s, p) => s + (p.amount || 0), 0))}</td>
+                                <td className="p-3 text-green-800">NET RECEIVED</td>
+                                <td className="p-3 text-right text-green-700">{formatCurrency(custPayments.reduce((s, p) => s + Number(p.amount || 0), 0))}</td>
                                 <td className="p-3"></td>
                               </tr>
                             </tfoot>
@@ -700,6 +831,60 @@ export function Customers({ userProfile }: CustomersProps) {
                   className="flex-1 py-2.5 bg-green-600 text-white rounded-lg font-medium text-sm hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2">
                   <Wallet className="w-4 h-4" />
                   {paymentLoading ? 'Saving...' : paymentSubmitLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reimburse a cleared receipt without deleting its payment history */}
+      {reimbursementModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center p-0 sm:p-4 z-50">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-md overflow-hidden">
+            <div className="p-5 border-b border-gray-100 flex justify-between items-start">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">Reimburse Cleared Receipt</h2>
+                <p className="text-sm text-gray-500 mt-0.5">{reimbursementModal.customer.name}</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  Receipt ID {reimbursementModal.sale.id.slice(0, 10)}...
+                </p>
+              </div>
+              <button onClick={() => setReimbursementModal(null)} disabled={reimbursementLoading}
+                className="p-1 text-gray-400 hover:text-gray-600 disabled:opacity-50">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                <div className="flex justify-between items-center gap-3">
+                  <span className="text-sm font-medium text-orange-800">Amount to reimburse</span>
+                  <span className="text-xl font-bold text-orange-700">{formatCurrency(reimbursementAmount)}</span>
+                </div>
+                <p className="text-xs text-orange-700 mt-2">
+                  This amount will be returned to the receipt as pending. The original payment history will remain unchanged.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Reason (required)</label>
+                <input type="text" value={reimbursementReason}
+                  onChange={e => setReimbursementReason(e.target.value)}
+                  placeholder="e.g. Payment entered against the wrong receipt"
+                  autoFocus disabled={reimbursementLoading}
+                  className="w-full p-3 border border-gray-300 rounded-lg focus:ring-orange-500 focus:border-orange-500 text-sm disabled:bg-gray-50" />
+              </div>
+              <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-700">
+                After confirmation, the receipt and customer balance will show {formatCurrency(reimbursementAmount)} pending again.
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button onClick={() => setReimbursementModal(null)} disabled={reimbursementLoading}
+                  className="flex-1 py-2.5 text-gray-700 border border-gray-200 rounded-lg font-medium text-sm hover:bg-gray-50 disabled:opacity-50">
+                  Cancel
+                </button>
+                <button onClick={handleReimbursement} disabled={!isReimbursementValid || reimbursementLoading}
+                  className="flex-1 py-2.5 bg-orange-600 text-white rounded-lg font-medium text-sm hover:bg-orange-700 disabled:opacity-50 flex items-center justify-center gap-2">
+                  <Undo2 className="w-4 h-4" />
+                  {reimbursementLoading ? 'Saving...' : 'Confirm Reimbursement'}
                 </button>
               </div>
             </div>
@@ -821,7 +1006,24 @@ export function Customers({ userProfile }: CustomersProps) {
                   )}
                 </>
               ) : (
-                <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">Fully Paid</div>
+                <>
+                  <div className="text-xs text-green-700 bg-green-50 px-3 py-2 rounded-lg">Fully Paid</div>
+                  {canRecordPayments && customers.find(c => c.id === selectedSale.customerId) && receiptReimbursableAmount(selectedSale) > 0 && (
+                    <button
+                      onClick={() => {
+                        const cust = customers.find(c => c.id === selectedSale.customerId);
+                        if (cust) {
+                          const sale = selectedSale;
+                          setSelectedSale(null);
+                          openReceiptReimbursement(cust, sale);
+                        }
+                      }}
+                      className="mt-2 w-full flex items-center justify-center gap-2 rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-sm font-semibold text-orange-700 hover:bg-orange-100"
+                    >
+                      <Undo2 className="w-4 h-4" /> Reimburse &amp; Make Pending
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
